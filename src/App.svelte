@@ -126,6 +126,7 @@
   let focusModeTimer: number | null = null;
 
   let undoToast: { noteId: string; title: string; timeoutId: number } | null = null;
+  let trashDockOpen = false;
 
   let editorTextareaEl: HTMLTextAreaElement | null = null;
   let cursorOffset = 0;
@@ -414,6 +415,7 @@
     paletteMode = mode;
     paletteModeNonce += 1;
     paletteOpen = true;
+    trashDockOpen = false;
     desktopTocOpen = false;
     mobileTocOpen = false;
     mobileActionSheetOpen = false;
@@ -439,6 +441,7 @@
   async function bootstrap(): Promise<void> {
     void persistence.sweepTrash();
     notes = sortNotes(await persistence.listMetadata());
+    await refreshTrashNotes();
 
     if (notes.length === 0) {
       await createNote();
@@ -950,6 +953,7 @@
     await persistence.moveToTrash(noteId);
     notes = notes.filter((item) => item.id !== noteId);
     queueUndoToast(note.id, note.title);
+    await refreshTrashNotes();
 
     closePalette();
 
@@ -993,6 +997,7 @@
 
     await persistence.restoreFromTrash(restoreTarget);
     notes = sortNotes(await persistence.listMetadata());
+    await refreshTrashNotes();
 
     if (notes.some((note) => note.id === restoreTarget)) {
       await selectNote(restoreTarget);
@@ -1002,9 +1007,28 @@
   async function handleRestoreNote(noteId: string): Promise<void> {
     await persistence.restoreFromTrash(noteId);
     notes = sortNotes(await persistence.listMetadata());
-    trashNotes = await persistence.listTrashMetadata();
+    await refreshTrashNotes();
     closePalette();
     await selectNote(noteId);
+  }
+
+  async function refreshTrashNotes(): Promise<void> {
+    trashNotes = await persistence.listTrashMetadata();
+  }
+
+  async function toggleTrashDock(): Promise<void> {
+    if (trashDockOpen) {
+      trashDockOpen = false;
+      return;
+    }
+
+    await refreshTrashNotes();
+    trashDockOpen = true;
+  }
+
+  async function handleQuickRestoreFromTrash(noteId: string): Promise<void> {
+    await handleRestoreNote(noteId);
+    trashDockOpen = true;
   }
 
   async function handleRenameNote(noteId: string, newTitle: string): Promise<void> {
@@ -1492,6 +1516,36 @@
       <button type="button" on:click={() => void undoDelete()}>undo ({UNDO_SHORTCUT_LABEL})</button>
     </div>
   {/if}
+
+  <div class="trash-dock">
+    {#if trashDockOpen}
+      <div class="trash-dock-panel" role="dialog" aria-label="trash restore panel">
+        <div class="trash-dock-header">
+          <span>trash</span>
+          <button type="button" class="ghost" on:click={() => (trashDockOpen = false)}>close</button>
+        </div>
+        {#if trashNotes.length === 0}
+          <p>trash is empty</p>
+        {:else}
+          <ul>
+            {#each trashNotes.slice(0, 8) as note}
+              <li>
+                <button type="button" class="trash-dock-item" on:click={() => void handleQuickRestoreFromTrash(note.id)}>
+                  {note.title}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
+    <button type="button" class="trash-dock-trigger" aria-label="open trash restore panel" on:click={() => void toggleTrashDock()}>
+      <span aria-hidden="true">🗑</span>
+      {#if trashNotes.length > 0}
+        <span class="trash-dock-count">{Math.min(trashNotes.length, 99)}</span>
+      {/if}
+    </button>
+  </div>
 </div>
 
 <UtilityHub
@@ -1767,6 +1821,119 @@
     font: inherit;
     padding: 5px 8px;
     flex-shrink: 0;
+  }
+
+  .trash-dock {
+    position: fixed;
+    right: 12px;
+    bottom: 14px;
+    z-index: 140;
+    display: grid;
+    justify-items: end;
+    gap: 8px;
+  }
+
+  .trash-dock-trigger {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-round);
+    border: var(--border);
+    background: var(--surface-elevated);
+    color: var(--text-dim);
+    box-shadow: var(--shadow-elevated);
+    font-size: 14px;
+    line-height: 1;
+    position: relative;
+  }
+
+  .trash-dock-trigger:hover {
+    border-color: var(--accent-muted);
+    color: var(--accent);
+  }
+
+  .trash-dock-count {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    min-width: 15px;
+    height: 15px;
+    border-radius: var(--radius-round);
+    border: var(--border);
+    background: var(--surface-elevated);
+    color: var(--accent);
+    font-size: 9px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 3px;
+    font-weight: 600;
+  }
+
+  .trash-dock-panel {
+    width: min(220px, calc(100vw - 24px));
+    max-height: 240px;
+    overflow: auto;
+    border: var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-elevated);
+    box-shadow: var(--shadow-elevated);
+    padding: 8px;
+    display: grid;
+    gap: 6px;
+  }
+
+  .trash-dock-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .trash-dock-header button {
+    border: var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 10px;
+    padding: 3px 6px;
+  }
+
+  .trash-dock-panel p {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  .trash-dock-panel ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 4px;
+  }
+
+  .trash-dock-item {
+    width: 100%;
+    text-align: left;
+    border: var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    padding: 6px 7px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .trash-dock-item:hover {
+    border-color: var(--accent-muted);
+    color: var(--accent);
   }
 
   @media (max-width: 800px) {
