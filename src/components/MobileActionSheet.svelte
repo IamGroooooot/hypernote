@@ -18,9 +18,9 @@
   <!-- svelte-ignore a11y-click-events-have-key-events -->
   <!-- svelte-ignore a11y-no-static-element-interactions -->
   <div class="mobile-action-backdrop" on:click={handleBackdropClick}>
-    <section class="mobile-action-sheet" aria-label="mobile actions" role="dialog">
+    <div class="mobile-action-sheet" role="dialog" aria-modal="true" aria-labelledby="mobile-actions-title">
       <header>
-        <h2>Actions</h2>
+        <h2 id="mobile-actions-title">Actions</h2>
         <button type="button" on:click={onClose}>close</button>
       </header>
 
@@ -29,7 +29,7 @@
       <button type="button" on:click={onExportCurrent}>export current note</button>
       <button type="button" on:click={onExportWorkspace}>export workspace</button>
       <button type="button" on:click={onShowGestureHelp}>gesture help</button>
-    </section>
+    </div>
   </div>
 {/if}
 

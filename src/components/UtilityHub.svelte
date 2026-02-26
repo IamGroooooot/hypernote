@@ -27,11 +27,11 @@
   <!-- svelte-ignore a11y-click-events-have-key-events -->
   <!-- svelte-ignore a11y-no-static-element-interactions -->
   <div class="utility-hub-backdrop" on:click={handleBackdropClick}>
-    <section class="utility-hub" aria-label="utility hub" role="dialog">
+    <div class="utility-hub" role="dialog" aria-modal="true" aria-labelledby="utility-hub-title">
       <header>
         <div class="title-row">
           <span class={`status-dot ${dotClass}`}></span>
-          <h2>Utility Hub</h2>
+          <h2 id="utility-hub-title">Utility Hub</h2>
         </div>
         <button type="button" class="ghost" on:click={onClose}>close</button>
       </header>
@@ -68,7 +68,7 @@
           </ul>
         {/if}
       </div>
-    </section>
+    </div>
   </div>
 {/if}
 
