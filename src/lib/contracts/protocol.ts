@@ -1,4 +1,4 @@
-export type FrameType = 'hello' | 'note_list' | 'state_vector' | 'update' | 'error';
+export type FrameType = 'hello' | 'note_list' | 'state_vector' | 'update' | 'presence' | 'error';
 
 export const PROTOCOL_VERSION = 1;
 
@@ -15,6 +15,7 @@ const FRAME_TYPES: Set<FrameType> = new Set([
   'note_list',
   'state_vector',
   'update',
+  'presence',
   'error',
 ]);
 

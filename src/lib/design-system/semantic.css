@@ -25,4 +25,11 @@
 
   --overlay-strong: rgba(10, 10, 15, var(--alpha-overlay-strong));
   --overlay-medium: rgba(10, 10, 15, 0.45);
+
+  --presence-1: #58d1ff;
+  --presence-2: #4fe3ae;
+  --presence-3: #ffd166;
+  --presence-4: #ff8fab;
+  --presence-5: #b197fc;
+  --presence-6: #8ce99a;
 }

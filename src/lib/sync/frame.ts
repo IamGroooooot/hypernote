@@ -23,11 +23,21 @@ export interface ErrorPayload {
   message: string;
 }
 
+export interface PresencePayload {
+  cursorOffset: number;
+  selectionSize: number;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+  emittedAt: number;
+}
+
 export interface FramePayloadByType {
   hello: HelloPayload;
   note_list: NoteListPayload;
   state_vector: BinaryPayload;
   update: BinaryPayload;
+  presence: PresencePayload;
   error: ErrorPayload;
 }
 
@@ -81,6 +91,14 @@ export function createUpdateFrame(
   update: Uint8Array,
 ): TypedFrame<'update'> {
   return createTypedFrame('update', noteId, senderId, { bytes: [...update] });
+}
+
+export function createPresenceFrame(
+  noteId: string,
+  senderId: string,
+  payload: PresencePayload,
+): TypedFrame<'presence'> {
+  return createTypedFrame('presence', noteId, senderId, payload);
 }
 
 export function createErrorFrame(
@@ -178,6 +196,8 @@ function isTypedFrame(frame: WsFrame): frame is AnyTypedFrame {
       return isBinaryPayload(frame.payload);
     case 'update':
       return isBinaryPayload(frame.payload);
+    case 'presence':
+      return isPresencePayload(frame.payload);
     case 'error':
       return isErrorPayload(frame.payload);
     default:
@@ -215,6 +235,31 @@ function isBinaryPayload(payload: unknown): payload is BinaryPayload {
   }
 
   return value.bytes.every((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 255);
+}
+
+function isPresencePayload(payload: unknown): payload is PresencePayload {
+  if (!payload || typeof payload !== 'object') {
+    return false;
+  }
+
+  const value = payload as Record<string, unknown>;
+  const numericKeys: Array<keyof PresencePayload> = [
+    'cursorOffset',
+    'selectionSize',
+    'scrollTop',
+    'scrollHeight',
+    'clientHeight',
+    'emittedAt',
+  ];
+
+  for (const key of numericKeys) {
+    const current = value[key];
+    if (typeof current !== 'number' || !Number.isFinite(current) || current < 0) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function isStringArrayRecord<TField extends string>(

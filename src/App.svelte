@@ -42,10 +42,12 @@
   import {
     createErrorFrame,
     createHelloFrame,
+    createPresenceFrame,
     createUpdateFrame,
     decodeBinaryPayload,
     decodeFrameMessage,
     serializeFrame,
+    type PresencePayload,
   } from './lib/sync/frame';
   import {
     allowsInboundFrame,
@@ -70,6 +72,8 @@
   const MAX_SWIPE_VERTICAL_DRIFT_PX = 56;
   const SWIPE_VECTOR_VISIBLE_MS = 420;
   const GESTURE_COACHMARK_KEY = 'hypernote:gesture-coachmark-count';
+  const PRESENCE_THROTTLE_MS = 120;
+  const PRESENCE_STALE_MS = 20_000;
   const JOIN_INPUT_HINT = 'Enter host, host:port, or ws://host:port';
   const SHARE_TARGET_HINT = 'Share this target with a collaborator on the same LAN';
   const SHARE_TARGET_LOADING = 'Resolving local share target...';
@@ -82,6 +86,23 @@
     peerId: string;
     addr: string;
     requestedAt: number;
+  };
+  type ScrollMetrics = {
+    scrollTop: number;
+    scrollHeight: number;
+    clientHeight: number;
+  };
+  type RemotePresence = PresencePayload & {
+    peerId: string;
+    noteId: string;
+  };
+  type PresenceIndicator = {
+    peerId: string;
+    label: string;
+    color: string;
+    cursorProgress: number;
+    scrollProgress: number;
+    cursorLine: number;
   };
 
   let notes: NoteMeta[] = [];
@@ -146,11 +167,19 @@
       }
     | null = null;
   let swipeVectorTimer: number | null = null;
+  let presenceBroadcastTimer: number | null = null;
+  let localScrollMetrics: ScrollMetrics = {
+    scrollTop: 0,
+    scrollHeight: 1,
+    clientHeight: 1,
+  };
+  let remotePresenceByPeer: Record<string, RemotePresence> = {};
 
-  $: showMobileTabs = isMobileViewport;
+  $: showMobileTabs = isMobileViewport && mobileTab === 'notes';
   $: tocHeadings = parseMarkdownToc(editorText);
   $: activeTocHeadingId = findActiveHeadingId(tocHeadings, cursorOffset);
   $: connectedPeerCount = peers.filter((peer) => peer.status.toUpperCase() === 'CONNECTED').length;
+  $: remotePresenceIndicators = buildPresenceIndicatorsForSelectedNote();
 
   onMount(() => {
     void bootstrap();
@@ -209,6 +238,7 @@
       pendingJoinRequests = pendingJoinRequests.filter((request) => request.peerId !== event.peerId);
       peerStore.removePeer(event.peerId);
       removePeerDisplayName(event.peerId);
+      removeRemotePresence(event.peerId);
       peers = peerStore.peersForNote('');
       sync = peerStore.syncStatus(selectedId);
     });
@@ -218,6 +248,7 @@
     });
 
     const refreshInterval = window.setInterval(() => {
+      pruneStalePresence();
       void refreshPeers();
     }, 5_000);
 
@@ -236,6 +267,7 @@
       clearFocusModeTimer();
       clearCoachmarkTimer();
       clearSwipeVectorTimer();
+      clearPresenceBroadcastTimer();
       clearUndoToast();
       releaseBridge();
     };
@@ -420,6 +452,208 @@
     }
   }
 
+  function clearPresenceBroadcastTimer(): void {
+    if (presenceBroadcastTimer !== null) {
+      window.clearTimeout(presenceBroadcastTimer);
+      presenceBroadcastTimer = null;
+    }
+  }
+
+  function schedulePresenceBroadcast(): void {
+    if (!myPeerId || !selectedId) {
+      return;
+    }
+
+    if (presenceBroadcastTimer !== null) {
+      return;
+    }
+
+    presenceBroadcastTimer = window.setTimeout(() => {
+      presenceBroadcastTimer = null;
+      void broadcastPresenceToApprovedPeers();
+    }, PRESENCE_THROTTLE_MS);
+  }
+
+  function updateLocalScrollMetrics(next: ScrollMetrics): void {
+    localScrollMetrics = {
+      scrollTop: Math.max(0, next.scrollTop),
+      scrollHeight: Math.max(1, next.scrollHeight),
+      clientHeight: Math.max(1, next.clientHeight),
+    };
+    schedulePresenceBroadcast();
+  }
+
+  function snapshotScrollMetrics(): ScrollMetrics {
+    if (!editorTextareaEl) {
+      return localScrollMetrics;
+    }
+
+    return {
+      scrollTop: Math.max(0, editorTextareaEl.scrollTop),
+      scrollHeight: Math.max(1, editorTextareaEl.scrollHeight),
+      clientHeight: Math.max(1, editorTextareaEl.clientHeight),
+    };
+  }
+
+  function currentSelectionSize(): number {
+    if (!editorTextareaEl) {
+      return 0;
+    }
+
+    const start = editorTextareaEl.selectionStart ?? 0;
+    const end = editorTextareaEl.selectionEnd ?? start;
+    return Math.max(0, end - start);
+  }
+
+  function createLocalPresencePayload(): PresencePayload {
+    const scrollMetrics = snapshotScrollMetrics();
+
+    return {
+      cursorOffset: Math.max(0, cursorOffset),
+      selectionSize: currentSelectionSize(),
+      scrollTop: scrollMetrics.scrollTop,
+      scrollHeight: scrollMetrics.scrollHeight,
+      clientHeight: scrollMetrics.clientHeight,
+      emittedAt: Date.now(),
+    };
+  }
+
+  async function sendPresenceToPeer(peerId: string): Promise<void> {
+    if (!selectedId || !myPeerId || !isPeerApproved(peerId)) {
+      return;
+    }
+
+    const frame = createPresenceFrame(selectedId, myPeerId, createLocalPresencePayload());
+    await sendToPeer(peerId, serializeFrame(frame));
+  }
+
+  async function broadcastPresenceToApprovedPeers(): Promise<void> {
+    if (!selectedId || !myPeerId) {
+      return;
+    }
+
+    const approvedPeers = peers.filter(
+      (peer) => peer.status === 'CONNECTED' && isPeerApproved(peer.peerId),
+    );
+    if (approvedPeers.length === 0) {
+      return;
+    }
+
+    const frame = createPresenceFrame(selectedId, myPeerId, createLocalPresencePayload());
+    const payload = serializeFrame(frame);
+    await Promise.all(approvedPeers.map((peer) => sendToPeer(peer.peerId, payload)));
+  }
+
+  function upsertRemotePresence(peerId: string, noteId: string, payload: PresencePayload): void {
+    remotePresenceByPeer = {
+      ...remotePresenceByPeer,
+      [peerId]: {
+        peerId,
+        noteId,
+        ...payload,
+      },
+    };
+  }
+
+  function removeRemotePresence(peerId: string): void {
+    if (!(peerId in remotePresenceByPeer)) {
+      return;
+    }
+
+    const next = { ...remotePresenceByPeer };
+    delete next[peerId];
+    remotePresenceByPeer = next;
+  }
+
+  function pruneStalePresence(): void {
+    const cutoff = Date.now() - PRESENCE_STALE_MS;
+    const next: Record<string, RemotePresence> = {};
+    let changed = false;
+
+    for (const [peerId, presence] of Object.entries(remotePresenceByPeer)) {
+      if (presence.emittedAt < cutoff) {
+        changed = true;
+        continue;
+      }
+
+      next[peerId] = presence;
+    }
+
+    if (changed) {
+      remotePresenceByPeer = next;
+    }
+  }
+
+  function buildPresenceIndicatorsForSelectedNote(): PresenceIndicator[] {
+    if (!selectedId) {
+      return [];
+    }
+
+    const totalLines = Math.max(1, editorText.split('\n').length);
+    const indicators: PresenceIndicator[] = [];
+
+    for (const presence of Object.values(remotePresenceByPeer)) {
+      if (presence.noteId !== selectedId) {
+        continue;
+      }
+
+      const line = lineFromOffset(editorText, presence.cursorOffset);
+      const cursorProgress = totalLines <= 1 ? 0 : clamp01(line / (totalLines - 1));
+      const scrollRange = Math.max(1, presence.scrollHeight - presence.clientHeight);
+      const scrollProgress = clamp01(presence.scrollTop / scrollRange);
+      const label = peerDisplayNames[presence.peerId] ?? buildPeerDisplayName(presence.peerId);
+
+      indicators.push({
+        peerId: presence.peerId,
+        label,
+        color: colorForPeer(presence.peerId),
+        cursorProgress,
+        scrollProgress,
+        cursorLine: line,
+      });
+    }
+
+    return indicators.sort((left, right) => left.label.localeCompare(right.label));
+  }
+
+  function lineFromOffset(text: string, offset: number): number {
+    const safeOffset = Math.max(0, Math.min(Math.floor(offset), text.length));
+    let line = 0;
+
+    for (let index = 0; index < safeOffset; index += 1) {
+      if (text.charCodeAt(index) === 10) {
+        line += 1;
+      }
+    }
+
+    return line;
+  }
+
+  function colorForPeer(peerId: string): string {
+    const palette = [
+      'var(--presence-1)',
+      'var(--presence-2)',
+      'var(--presence-3)',
+      'var(--presence-4)',
+      'var(--presence-5)',
+      'var(--presence-6)',
+    ];
+    let hash = 0;
+    for (let index = 0; index < peerId.length; index += 1) {
+      hash = (hash * 31 + peerId.charCodeAt(index)) | 0;
+    }
+
+    return palette[Math.abs(hash) % palette.length];
+  }
+
+  function clamp01(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+
+    return Math.min(1, Math.max(0, value));
+  }
+
   function subscribeToMediaQuery(
     mediaQuery: MediaQueryList,
     handler: (event: MediaQueryListEvent) => void,
@@ -553,6 +787,8 @@
     if (isMobileViewport) {
       setMobileTab('editor');
     }
+
+    schedulePresenceBroadcast();
   }
 
   async function announceOpenNotes(noteId: string): Promise<void> {
@@ -613,6 +849,8 @@
       );
       await Promise.all(approvedPeers.map((peer) => sendToPeer(peer.peerId, payload)));
     }
+
+    schedulePresenceBroadcast();
   }
 
   function markTypingActivity(): void {
@@ -706,6 +944,7 @@
     const fullState = bridge.encodeStateAsUpdate();
     const updateFrame = createUpdateFrame(selectedId, myPeerId, fullState);
     await sendToPeer(peerId, serializeFrame(updateFrame));
+    await sendPresenceToPeer(peerId);
   }
 
   async function handlePeerConnected(event: PeerConnectedEvent): Promise<void> {
@@ -782,6 +1021,7 @@
         const fullState = bridge.encodeStateAsUpdate();
         const updateFrame = createUpdateFrame(selectedId, myPeerId, fullState);
         await sendToPeer(event.peerId, serializeFrame(updateFrame));
+        await sendPresenceToPeer(event.peerId);
       }
     }
 
@@ -792,6 +1032,15 @@
 
       const bytes = decodeBinaryPayload(frame.payload as { bytes: number[] });
       await handleRemoteUpdate(event.peerId, frame.noteId, bytes);
+      return;
+    }
+
+    if (frame.type === 'presence') {
+      if (!isPeerApproved(event.peerId)) {
+        return;
+      }
+
+      upsertRemotePresence(event.peerId, frame.noteId, frame.payload as PresencePayload);
     }
   }
 
@@ -898,6 +1147,7 @@
           (request) => request.peerId !== existingPeer.peerId,
         );
         removePeerDisplayName(existingPeer.peerId);
+        removeRemotePresence(existingPeer.peerId);
         peerStore.removePeer(existingPeer.peerId);
       }
     }
@@ -943,6 +1193,7 @@
 
     await disconnectPeer(peerId, 'join request rejected by host');
     peerStore.removePeer(peerId);
+    removeRemotePresence(peerId);
     peers = peerStore.peersForNote('');
     sync = peerStore.syncStatus(selectedId);
   }
@@ -968,6 +1219,7 @@
     pendingJoinRequests = pendingJoinRequests.filter((request) => request.peerId !== peerId);
     peerStore.removePeer(peerId);
     removePeerDisplayName(peerId);
+    removeRemotePresence(peerId);
     peers = peerStore.peersForNote('');
     sync = peerStore.syncStatus(selectedId);
     void refreshPeers();
@@ -1513,7 +1765,10 @@
   }
 </script>
 
-<div class="app-shell" class:mobile-editor-fullbleed={isMobileViewport && mobileTab === 'editor'}>
+<div
+  class="app-shell"
+  class:mobile-editor-fullbleed={isMobileViewport && mobileTab === 'editor' && !showMobileTabs}
+>
   {#if !isMobileViewport || mobileTab === 'notes'}
     <TopBar
       state={sync.state}
@@ -1556,12 +1811,17 @@
         title={notes.find((note) => note.id === selectedId)?.title ?? 'Untitled'}
         value={editorText}
         crdtSizeWarning={crdtSizeWarning}
+        remotePresence={remotePresenceIndicators}
         bind:textareaEl={editorTextareaEl}
         showTitle={!isMobileViewport}
         onTouchStart={handleEditorTouchStart}
         onTouchEnd={handleEditorTouchEnd}
         onCursorChange={(nextOffset) => {
           cursorOffset = nextOffset;
+          schedulePresenceBroadcast();
+        }}
+        onScrollMetricsChange={(metrics) => {
+          updateLocalScrollMetrics(metrics);
         }}
         onInput={(nextValue) => {
           void handleEditorInput(nextValue);

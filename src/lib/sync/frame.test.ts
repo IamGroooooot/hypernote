@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { PROTOCOL_VERSION } from '../contracts';
 import {
   createHelloFrame,
+  createPresenceFrame,
   createUpdateFrame,
   decodeBinaryPayload,
   decodeFrameMessage,
@@ -39,6 +40,24 @@ describe('sync frame helpers', () => {
         const bytes = decodeBinaryPayload(decoded.frame.payload);
         expect(Array.from(bytes)).toEqual([10, 20, 30]);
       }
+    }
+  });
+
+  it('round-trips presence payload', () => {
+    const frame = createPresenceFrame('note-1', 'peer-1', {
+      cursorOffset: 42,
+      selectionSize: 0,
+      scrollTop: 160,
+      scrollHeight: 640,
+      clientHeight: 320,
+      emittedAt: 1_700_000_000_000,
+    });
+    const decoded = decodeFrameMessage(serializeFrame(frame));
+
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok && decoded.frame.type === 'presence') {
+      expect(decoded.frame.payload.cursorOffset).toBe(42);
+      expect(decoded.frame.payload.scrollTop).toBe(160);
     }
   });
 
