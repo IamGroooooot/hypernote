@@ -56,6 +56,9 @@
 
   let bridge: TextareaYjsBridge | null = null;
   let cleanupBridge: (() => void) | null = null;
+  let crdtSizeWarning = false;
+
+  const CRDT_WARN_BYTES = 100 * 1024 * 1024; // 100 MB
 
   onMount(() => {
     void bootstrap();
@@ -238,9 +241,12 @@
 
     notes = sortNotes(notes.map((note) => (note.id === selectedId ? nextMeta : note)));
 
+    const yjsState = bridge.encodeStateAsUpdate();
+    crdtSizeWarning = yjsState.length > CRDT_WARN_BYTES;
+
     persistence.scheduleSave({
       meta: nextMeta,
-      yjsState: bridge.encodeStateAsUpdate(),
+      yjsState,
     });
 
     if (event.source === 'remote') {
@@ -384,6 +390,7 @@
     <EditorPanel
       title={notes.find((note) => note.id === selectedId)?.title ?? 'Untitled'}
       value={editorText}
+      crdtSizeWarning={crdtSizeWarning}
       onInput={(nextValue) => {
         void handleEditorInput(nextValue);
       }}
