@@ -72,6 +72,8 @@ export function createTextareaYjsBridge(
         return null;
       }
 
+      const { prefixLen, deleteLen, insertText } = computeMinimalEdit(current, nextText);
+
       let capturedUpdate: Uint8Array | null = null;
       const captureLocalUpdate = (update: Uint8Array, origin: unknown) => {
         if (origin === LOCAL_ORIGIN) {
@@ -82,12 +84,12 @@ export function createTextareaYjsBridge(
       doc.on('update', captureLocalUpdate);
 
       doc.transact(() => {
-        if (ytext.length > 0) {
-          ytext.delete(0, ytext.length);
+        if (deleteLen > 0) {
+          ytext.delete(prefixLen, deleteLen);
         }
 
-        if (nextText.length > 0) {
-          ytext.insert(0, nextText);
+        if (insertText.length > 0) {
+          ytext.insert(prefixLen, insertText);
         }
       }, LOCAL_ORIGIN);
 
@@ -121,5 +123,41 @@ export function createTextareaYjsBridge(
       doc.off('update', handleDocUpdate);
       doc.destroy();
     },
+  };
+}
+
+interface MinimalEdit {
+  prefixLen: number;
+  deleteLen: number;
+  insertText: string;
+}
+
+function computeMinimalEdit(current: string, nextText: string): MinimalEdit {
+  let prefixLen = 0;
+  const minLen = Math.min(current.length, nextText.length);
+
+  while (prefixLen < minLen && current[prefixLen] === nextText[prefixLen]) {
+    prefixLen += 1;
+  }
+
+  let currentSuffixIndex = current.length - 1;
+  let nextSuffixIndex = nextText.length - 1;
+
+  while (
+    currentSuffixIndex >= prefixLen &&
+    nextSuffixIndex >= prefixLen &&
+    current[currentSuffixIndex] === nextText[nextSuffixIndex]
+  ) {
+    currentSuffixIndex -= 1;
+    nextSuffixIndex -= 1;
+  }
+
+  const deleteLen = currentSuffixIndex - prefixLen + 1;
+  const insertText = nextText.slice(prefixLen, nextSuffixIndex + 1);
+
+  return {
+    prefixLen,
+    deleteLen: Math.max(0, deleteLen),
+    insertText,
   };
 }

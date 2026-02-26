@@ -39,7 +39,8 @@ export function encodeNoteContainer(meta: NoteMeta, yjsState: Uint8Array): Encod
   bytes.set(yjsState, offset);
   offset += yjsState.length;
 
-  view.setUint32(offset, crc32(yjsState), false);
+  const checksumInput = concatBytes(metadataBytes, yjsState);
+  view.setUint32(offset, crc32(checksumInput), false);
 
   return { bytes };
 }
@@ -49,7 +50,7 @@ export function decodeNoteMetadata(bytes: Uint8Array): NoteMeta {
 }
 
 export function decodeNoteContainer(bytes: Uint8Array): DecodedNote {
-  const { meta, view, offsetAfterMetadata } = parseContainerPrefix(bytes);
+  const { meta, metadataBytes, view, offsetAfterMetadata } = parseContainerPrefix(bytes);
   let offset = offsetAfterMetadata;
   if (offset + 8 > bytes.length) {
     throw new Error('Invalid container: missing body length');
@@ -65,7 +66,8 @@ export function decodeNoteContainer(bytes: Uint8Array): DecodedNote {
 
   const yjsState = bytes.slice(offset, bodyEnd);
   const expectedChecksum = view.getUint32(bodyEnd, false);
-  const actualChecksum = crc32(yjsState);
+  const checksumInput = concatBytes(metadataBytes, yjsState);
+  const actualChecksum = crc32(checksumInput);
 
   if (expectedChecksum !== actualChecksum) {
     throw new Error('Invalid container: checksum mismatch');
@@ -76,6 +78,7 @@ export function decodeNoteContainer(bytes: Uint8Array): DecodedNote {
 
 interface ParsedContainerPrefix {
   meta: NoteMeta;
+  metadataBytes: Uint8Array;
   view: DataView;
   offsetAfterMetadata: number;
 }
@@ -102,10 +105,46 @@ function parseContainerPrefix(bytes: Uint8Array): ParsedContainerPrefix {
     throw new Error('Invalid container: metadata overflow');
   }
 
-  const metadataJson = textDecoder.decode(bytes.slice(METADATA_OFFSET, metadataEnd));
-  const meta = JSON.parse(metadataJson) as NoteMeta;
+  const metadataBytes = bytes.slice(METADATA_OFFSET, metadataEnd);
+  const metadataJson = textDecoder.decode(metadataBytes);
+  const meta = parseMetadata(metadataJson);
 
-  return { meta, view, offsetAfterMetadata: metadataEnd };
+  return { meta, metadataBytes, view, offsetAfterMetadata: metadataEnd };
+}
+
+function parseMetadata(value: string): NoteMeta {
+  const parsed = JSON.parse(value) as unknown;
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Invalid container: malformed metadata');
+  }
+
+  const meta = parsed as Record<string, unknown>;
+
+  if (
+    typeof meta.id !== 'string' ||
+    typeof meta.title !== 'string' ||
+    typeof meta.createdAt !== 'number' ||
+    typeof meta.updatedAt !== 'number' ||
+    !(meta.deletedAt === null || typeof meta.deletedAt === 'number')
+  ) {
+    throw new Error('Invalid container: malformed metadata');
+  }
+
+  return {
+    id: meta.id,
+    title: meta.title,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
+    deletedAt: meta.deletedAt,
+  };
+}
+
+function concatBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
+  const bytes = new Uint8Array(left.length + right.length);
+  bytes.set(left, 0);
+  bytes.set(right, left.length);
+  return bytes;
 }
 
 // Simple CRC32 implementation for deterministic container validation.

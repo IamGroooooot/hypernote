@@ -11,10 +11,10 @@
     type TextChangeEvent,
     type TextareaYjsBridge,
   } from './lib/editor/textarea-yjs-bridge';
-  import { createPeerStatusStore } from './lib/stores/peer-status';
-  import { applyLocalEdit, listPeers } from './lib/tauri-client';
   import { BrowserNoteContainerStore } from './lib/persistence/browser-note-store';
   import { LocalNotePersistence } from './lib/persistence/local-note-persistence';
+  import { createPeerStatusStore } from './lib/stores/peer-status';
+  import { applyLocalEdit, listPeers, onPeerUpdate } from './lib/tauri-client';
 
   const persistence = new LocalNotePersistence(new BrowserNoteContainerStore());
   const peerStore = createPeerStatusStore();
@@ -34,11 +34,23 @@
   onMount(() => {
     void bootstrap();
 
+    const stopPeerUpdateSubscription = onPeerUpdate((event) => {
+      if (!bridge || event.noteId !== selectedId) {
+        return;
+      }
+
+      peerStore.markSyncStarted(event.noteId);
+      sync = peerStore.syncStatus(event.noteId);
+
+      bridge.applyPeerUpdate(Uint8Array.from(event.update));
+    });
+
     const refreshInterval = setInterval(() => {
       void refreshPeers();
     }, 5_000);
 
     return () => {
+      stopPeerUpdateSubscription();
       clearInterval(refreshInterval);
       releaseBridge();
     };
@@ -90,16 +102,11 @@
     peerStore.setActiveNote(noteId);
 
     const snapshot = await persistence.open(noteId);
-    const selectedMeta = notes.find((note) => note.id === noteId);
-
-    if (!selectedMeta) {
-      return;
-    }
 
     releaseBridge();
     bridge = createTextareaYjsBridge(noteId, { initialUpdate: snapshot.yjsState });
     cleanupBridge = bridge.onChange((event) => {
-      void handleBridgeChange(event, selectedMeta);
+      void handleBridgeChange(event);
     });
 
     editorText = bridge.getText();
@@ -128,18 +135,31 @@
     peerStore.markSyncStarted(selectedId);
     sync = peerStore.syncStatus(selectedId);
 
-    await applyLocalEdit(selectedId, update);
+    const applied = await applyLocalEdit(selectedId, update);
+    if (applied) {
+      peerStore.markSyncCompleted(selectedId);
+    } else {
+      peerStore.markSyncError(selectedId, 'failed to apply local edit');
+    }
+
+    sync = peerStore.syncStatus(selectedId);
   }
 
-  async function handleBridgeChange(event: TextChangeEvent, selectedMeta: NoteMeta): Promise<void> {
+  async function handleBridgeChange(event: TextChangeEvent): Promise<void> {
     editorText = event.text;
 
     if (!bridge || selectedId.length === 0) {
       return;
     }
 
+    const currentMeta = notes.find((note) => note.id === selectedId);
+
+    if (!currentMeta) {
+      return;
+    }
+
     const nextMeta: NoteMeta = {
-      ...selectedMeta,
+      ...currentMeta,
       title: titleFromText(event.text),
       updatedAt: Date.now(),
     };
@@ -153,9 +173,8 @@
 
     if (event.source === 'remote') {
       peerStore.markSyncCompleted(selectedId);
+      sync = peerStore.syncStatus(selectedId);
     }
-
-    sync = peerStore.syncStatus(selectedId);
   }
 
   async function refreshPeers(): Promise<void> {

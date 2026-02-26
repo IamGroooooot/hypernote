@@ -62,7 +62,8 @@ export class BrowserNoteContainerStore implements NoteContainerStore {
     const key = `${prefix}${noteId}`;
 
     if (typeof localStorage === 'undefined') {
-      return this.memoryStore.get(key) ?? null;
+      const value = this.memoryStore.get(key);
+      return value ? new Uint8Array(value) : null;
     }
 
     const encoded = localStorage.getItem(key);
@@ -76,13 +77,18 @@ export class BrowserNoteContainerStore implements NoteContainerStore {
 
   private writeRaw(prefix: string, noteId: string, bytes: Uint8Array): void {
     const key = `${prefix}${noteId}`;
+    const value = new Uint8Array(bytes);
 
     if (typeof localStorage === 'undefined') {
-      this.memoryStore.set(key, bytes);
+      this.memoryStore.set(key, value);
       return;
     }
 
-    localStorage.setItem(key, encodeBase64(bytes));
+    try {
+      localStorage.setItem(key, encodeBase64(value));
+    } catch {
+      throw new Error('failed to persist note container');
+    }
   }
 
   private deleteRaw(prefix: string, noteId: string): void {

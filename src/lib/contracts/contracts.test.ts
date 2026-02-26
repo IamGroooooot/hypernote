@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   createFrame,
   decodeNoteContainer,
-  decodeNoteMetadata,
   encodeNoteContainer,
   isValidWsFrame,
   PROTOCOL_VERSION,
@@ -56,18 +55,25 @@ describe('storage container', () => {
     expect(() => decodeNoteContainer(encoded.bytes)).toThrow('checksum mismatch');
   });
 
-  it('extracts metadata without reading document body', () => {
+  it('throws when metadata is tampered even if body is unchanged', () => {
     const meta: NoteMeta = {
-      id: 'note-meta',
-      title: 'Meta only',
-      createdAt: 10,
-      updatedAt: 20,
+      id: 'note-1',
+      title: 'Alpha',
+      createdAt: 1,
+      updatedAt: 2,
       deletedAt: null,
     };
 
-    const encoded = encodeNoteContainer(meta, new Uint8Array([3, 1, 4, 1, 5, 9]));
-    const metadata = decodeNoteMetadata(encoded.bytes);
+    const encoded = encodeNoteContainer(meta, new Uint8Array([1, 2, 3]));
+    const tampered = new Uint8Array(encoded.bytes);
 
-    expect(metadata).toEqual(meta);
+    const raw = String.fromCharCode(...tampered);
+    const replaced = raw.replace('Alpha', 'Bravo');
+
+    for (let index = 0; index < replaced.length; index += 1) {
+      tampered[index] = replaced.charCodeAt(index);
+    }
+
+    expect(() => decodeNoteContainer(tampered)).toThrow('checksum mismatch');
   });
 });
