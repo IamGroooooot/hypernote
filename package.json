@@ -27,6 +27,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@tauri-apps/plugin-fs": "^2.4.5",
     "yjs": "^13.6.29"
   }
 }
