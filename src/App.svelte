@@ -19,6 +19,7 @@
   import { exportCurrentNote, exportWorkspaceZip, type ExportNoteInput } from './lib/export/workspace-export';
   import { findActiveHeadingId, parseMarkdownToc } from './lib/editor/markdown-toc';
   import { BrowserNoteContainerStore } from './lib/persistence/browser-note-store';
+  import { buildPeerDisplayName } from './lib/peers/display-name';
   import { LocalNotePersistence } from './lib/persistence/local-note-persistence';
   import { isTauriEnv, TauriNoteContainerStore } from './lib/persistence/tauri-note-store';
   import { createPeerStatusStore } from './lib/stores/peer-status';
@@ -73,6 +74,7 @@
   const SHARE_TARGET_HINT = 'Share this target with a collaborator on the same LAN';
   const SHARE_TARGET_LOADING = 'Resolving local share target...';
   const UNDO_SHORTCUT_LABEL = formatModShortcut('Z');
+  const RUNTIME_ROLE_LABEL = isTauriEnv() ? 'host (tauri)' : 'guest (web)';
 
   type JoinWorkspaceStatus = 'idle' | 'joining' | 'joined' | 'error';
   type ShareTargetStatus = 'idle' | 'copied' | 'error';
@@ -111,6 +113,7 @@
   let joinFocusNonce = 0;
   let pendingJoinRequests: JoinRequest[] = [];
   let joinPeerStates: Record<string, JoinPeerState> = {};
+  let peerDisplayNames: Record<string, string> = {};
 
   let isMobileViewport = false;
   let mobileTab: 'notes' | 'editor' = 'editor';
@@ -202,6 +205,7 @@
       delete joinPeerStates[event.peerId];
       pendingJoinRequests = pendingJoinRequests.filter((request) => request.peerId !== event.peerId);
       peerStore.removePeer(event.peerId);
+      removePeerDisplayName(event.peerId);
       peers = peerStore.peersForNote('');
       sync = peerStore.syncStatus(selectedId);
     });
@@ -611,6 +615,7 @@
   }
 
   function upsertPendingJoinRequest(peerId: string, addr: string): void {
+    ensurePeerDisplayName(peerId);
     const existing = pendingJoinRequests.find((request) => request.peerId === peerId);
     if (existing) {
       pendingJoinRequests = pendingJoinRequests.map((request) =>
@@ -638,6 +643,7 @@
   async function handlePeerConnected(event: PeerConnectedEvent): Promise<void> {
     const state = createJoinPeerState(event.outbound ? 'outbound' : 'inbound');
     joinPeerStates[event.peerId] = state;
+    ensurePeerDisplayName(event.peerId);
 
     peerStore.upsertPeer({
       peerId: event.peerId,
@@ -814,6 +820,7 @@
         status,
         noteIds,
       });
+      ensurePeerDisplayName(peer.peerId);
     }
 
     for (const existingPeer of peerStore.peersForNote('')) {
@@ -822,6 +829,7 @@
         pendingJoinRequests = pendingJoinRequests.filter(
           (request) => request.peerId !== existingPeer.peerId,
         );
+        removePeerDisplayName(existingPeer.peerId);
         peerStore.removePeer(existingPeer.peerId);
       }
     }
@@ -891,9 +899,31 @@
 
     pendingJoinRequests = pendingJoinRequests.filter((request) => request.peerId !== peerId);
     peerStore.removePeer(peerId);
+    removePeerDisplayName(peerId);
     peers = peerStore.peersForNote('');
     sync = peerStore.syncStatus(selectedId);
     void refreshPeers();
+  }
+
+  function ensurePeerDisplayName(peerId: string): void {
+    if (peerDisplayNames[peerId]) {
+      return;
+    }
+
+    peerDisplayNames = {
+      ...peerDisplayNames,
+      [peerId]: buildPeerDisplayName(peerId),
+    };
+  }
+
+  function removePeerDisplayName(peerId: string): void {
+    if (!(peerId in peerDisplayNames)) {
+      return;
+    }
+
+    const next = { ...peerDisplayNames };
+    delete next[peerId];
+    peerDisplayNames = next;
   }
 
   function titleFromText(text: string): string {
@@ -1466,6 +1496,7 @@
 <UtilityHub
   open={utilityHubOpen}
   state={sync.state}
+  runtimeRole={RUNTIME_ROLE_LABEL}
   peerCount={sync.peerCount}
   peers={peers}
   shareTarget={shareWorkspaceTarget}
@@ -1476,6 +1507,7 @@
   joinMessage={joinWorkspaceMessage}
   joinFocusNonce={joinFocusNonce}
   pendingJoinRequests={pendingJoinRequests}
+  peerDisplayNames={peerDisplayNames}
   onClose={() => {
     utilityHubOpen = false;
   }}

@@ -11,6 +11,7 @@
 
   export let open = false;
   export let state: SyncStatus['state'] = 'offline';
+  export let runtimeRole = 'guest (web)';
   export let peerCount = 0;
   export let shareTarget = '';
   export let shareStatus: ShareStatus = 'idle';
@@ -21,6 +22,7 @@
   export let joinMessage = '';
   export let joinFocusNonce = 0;
   export let pendingJoinRequests: JoinRequest[] = [];
+  export let peerDisplayNames: Record<string, string> = {};
   export let onClose: () => void = () => {};
   export let onShareWorkspace: () => void = () => {};
   export let onExportCurrent: () => void = () => {};
@@ -39,6 +41,7 @@
 
   $: dotClass =
     state === 'error' ? 'error' : state === 'syncing' ? 'syncing' : state === 'connected' ? 'connected' : 'offline';
+  $: runtimeRoleClass = runtimeRole.startsWith('host') ? 'host' : 'guest';
 
   $: if (open && joinFocusNonce > previousJoinFocusNonce) {
     previousJoinFocusNonce = joinFocusNonce;
@@ -63,6 +66,14 @@
     event.preventDefault();
     onJoinWorkspace();
   }
+
+  function isPeerConnected(status: string): boolean {
+    return status.toUpperCase() === 'CONNECTED';
+  }
+
+  function peerLabel(peerId: string): string {
+    return peerDisplayNames[peerId] ?? peerId.slice(0, 8);
+  }
 </script>
 
 {#if open}
@@ -78,7 +89,10 @@
         <button type="button" class="ghost" on:click={onClose}>close</button>
       </header>
 
-      <div class="status-row">peers: {peerCount}</div>
+      <div class="status-row">
+        <span class={`runtime-role ${runtimeRoleClass}`}>role: {runtimeRole}</span>
+        <span>peers: {peerCount}</span>
+      </div>
 
       <form class="join-form" on:submit={handleJoinSubmit}>
         <label for="join-workspace-target">join workspace</label>
@@ -111,7 +125,7 @@
               <li>
                 <div class="join-request-info">
                   <span>{request.addr}</span>
-                  <small>{request.peerId.slice(0, 8)}</small>
+                  <small>{peerLabel(request.peerId)}</small>
                 </div>
                 <div class="join-request-actions">
                   <button type="button" on:click={() => onApproveJoin(request.peerId)}>approve</button>
@@ -155,14 +169,15 @@
             {#each peers as peer}
               <li>
                 <div class="peer-entry">
-                  <span>{peer.peerId.slice(0, 8)}</span>
-                  {#if peer.status === 'CONNECTED'}
+                  {#if isPeerConnected(peer.status)}
                     <span class="peer-status-dot connected" aria-label="connected" title="connected"></span>
+                    <span>{peerLabel(peer.peerId)}</span>
                   {:else}
+                    <span>{peerLabel(peer.peerId)}</span>
                     <span>{peer.status.toLowerCase()}</span>
                   {/if}
                 </div>
-                {#if peer.status === 'CONNECTED'}
+                {#if isPeerConnected(peer.status)}
                   <button type="button" class="ghost danger" on:click={() => onDisconnectPeer(peer.peerId)}
                     >disconnect</button
                   >
@@ -236,7 +251,24 @@
   }
 
   .status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .runtime-role {
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .runtime-role.host {
+    color: var(--accent);
+  }
+
+  .runtime-role.guest {
     color: var(--text-dim);
   }
 
@@ -500,8 +532,9 @@
   }
 
   .peer-entry {
-    display: grid;
-    gap: 2px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
     min-width: 0;
   }
 
