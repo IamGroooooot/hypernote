@@ -1,3 +1,6 @@
+import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+import { listen as tauriListen, type Event as TauriEvent, type UnlistenFn } from '@tauri-apps/api/event';
+
 import type { CommandAck, NoteDocument, NoteMeta, PeerInfo, PeerStatus } from './contracts';
 
 export interface PeerUpdateEvent {
@@ -23,6 +26,7 @@ declare global {
       };
     };
     __TAURI_INVOKE__?: InvokeFn;
+    __TAURI_INTERNALS__?: unknown;
   }
 }
 
@@ -31,7 +35,17 @@ function getInvoke(): InvokeFn | null {
     return null;
   }
 
-  return window.__TAURI__?.core?.invoke ?? window.__TAURI_INVOKE__ ?? null;
+  const globalInvoke = window.__TAURI__?.core?.invoke ?? window.__TAURI_INVOKE__ ?? null;
+  if (globalInvoke) {
+    return globalInvoke;
+  }
+
+  // Tauri v2 default runtime path when withGlobalTauri is disabled.
+  if ('__TAURI_INTERNALS__' in window) {
+    return <T>(command: string, args?: InvokeArgs) => tauriInvoke<T>(command, args);
+  }
+
+  return null;
 }
 
 function getListen(): ListenFn | null {
@@ -39,7 +53,20 @@ function getListen(): ListenFn | null {
     return null;
   }
 
-  return window.__TAURI__?.event?.listen ?? null;
+  const globalListen = window.__TAURI__?.event?.listen ?? null;
+  if (globalListen) {
+    return globalListen;
+  }
+
+  // Tauri v2 default runtime path when withGlobalTauri is disabled.
+  if ('__TAURI_INTERNALS__' in window) {
+    return (eventName, handler) =>
+      tauriListen(eventName, (event: TauriEvent<unknown>) => {
+        handler({ payload: event.payload });
+      }) as Promise<UnlistenFn>;
+  }
+
+  return null;
 }
 
 async function invokeOrFallback<T>(command: string, args: InvokeArgs, fallback: T): Promise<T> {
