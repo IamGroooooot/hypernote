@@ -1,4 +1,4 @@
-import { decodeNoteContainer, encodeNoteContainer, type NoteMeta } from '../contracts';
+import { decodeNoteContainer, decodeNoteMetadata, encodeNoteContainer, type NoteMeta } from '../contracts';
 import { createDebouncedSaveScheduler, type DebouncedSaveScheduler } from '../core';
 import { ContainerNoteMetadataIndex, type NoteMetadataIndex } from './metadata-index';
 import { StoreTrashMover, type TrashMover } from './trash-mover';
@@ -41,6 +41,34 @@ export class LocalNotePersistence {
   }
 
   async moveToTrash(noteId: string): Promise<void> {
+    // Stamp deletedAt into the container before moving so sweepTrash can GC it.
+    try {
+      const bytes = await this.store.readContainer(noteId);
+      const decoded = decodeNoteContainer(bytes);
+      const updatedMeta: NoteMeta = { ...decoded.meta, deletedAt: Date.now() };
+      const encoded = encodeNoteContainer(updatedMeta, decoded.yjsState);
+      await this.store.writeContainer(noteId, encoded.bytes);
+    } catch {
+      // Proceed even if metadata update fails — trash move must not block.
+    }
+
     await this.trashMover.move(noteId);
+  }
+
+  async sweepTrash(maxAgeDays = 30): Promise<void> {
+    const cutoffMs = maxAgeDays * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const containers = await this.store.listTrashContainers();
+
+    for (const bytes of containers) {
+      try {
+        const meta = decodeNoteMetadata(bytes);
+        if (meta.deletedAt !== null && now - meta.deletedAt > cutoffMs) {
+          await this.store.permanentDeleteFromTrash(meta.id);
+        }
+      } catch {
+        // Skip malformed containers.
+      }
+    }
   }
 }

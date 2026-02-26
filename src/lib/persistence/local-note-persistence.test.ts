@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { NoteMeta } from '../contracts';
+import { encodeNoteContainer } from '../contracts/storage';
 import { LocalNotePersistence } from './local-note-persistence';
 import { StoreTrashMover } from './trash-mover';
 import type { NoteContainerStore, NoteSnapshot } from './types';
@@ -52,6 +53,30 @@ describe('StoreTrashMover', () => {
   });
 });
 
+describe('LocalNotePersistence.sweepTrash', () => {
+  it('permanently deletes trash entries older than maxAgeDays', async () => {
+    const store = new InMemoryNoteContainerStore();
+    const persistence = new LocalNotePersistence(store);
+
+    const now = Date.now();
+    const msIn31Days = 31 * 24 * 60 * 60 * 1000;
+
+    // Save two notes, move both to trash with different deletedAt stamps.
+    await persistence.saveNow(createSnapshot('old-note', 'Old', now - msIn31Days));
+    await persistence.saveNow(createSnapshot('new-note', 'New', now - 1000));
+
+    // Manually stamp deletedAt by moving via persistence (which stamps deletedAt=now).
+    // For the "old" note we need a past deletedAt — inject directly via store.
+    store.injectTrash('old-note', createSnapshotWithDeletedAt('old-note', 'Old', now - msIn31Days));
+    store.injectTrash('new-note', createSnapshotWithDeletedAt('new-note', 'New', now - 1000));
+
+    await persistence.sweepTrash(30);
+
+    expect(store.hasTrash('old-note')).toBe(false);
+    expect(store.hasTrash('new-note')).toBe(true);
+  });
+});
+
 class InMemoryNoteContainerStore implements NoteContainerStore {
   private readonly notes = new Map<string, Uint8Array>();
   private readonly trash = new Map<string, Uint8Array>();
@@ -87,8 +112,20 @@ class InMemoryNoteContainerStore implements NoteContainerStore {
     this.trash.set(noteId, note);
   }
 
+  async listTrashContainers(): Promise<ReadonlyArray<Uint8Array>> {
+    return Array.from(this.trash.values(), (value) => value.slice());
+  }
+
+  async permanentDeleteFromTrash(noteId: string): Promise<void> {
+    this.trash.delete(noteId);
+  }
+
   injectContainer(bytes: Uint8Array): void {
     this.injectedContainers.push(bytes.slice());
+  }
+
+  injectTrash(noteId: string, bytes: Uint8Array): void {
+    this.trash.set(noteId, bytes.slice());
   }
 
   mutateContainer(noteId: string, mutator: (bytes: Uint8Array) => void): void {
@@ -122,6 +159,11 @@ function createSnapshot(id: string, title: string, updatedAt: number): NoteSnaps
 
   return {
     meta,
-    yjsState: new Uint8Array([updatedAt, updatedAt + 1, updatedAt + 2]),
+    yjsState: new Uint8Array([updatedAt & 0xff, (updatedAt + 1) & 0xff, (updatedAt + 2) & 0xff]),
   };
+}
+
+function createSnapshotWithDeletedAt(id: string, title: string, deletedAt: number): Uint8Array {
+  const meta: NoteMeta = { id, title, createdAt: deletedAt - 1000, updatedAt: deletedAt, deletedAt };
+  return encodeNoteContainer(meta, new Uint8Array([1, 2, 3])).bytes;
 }

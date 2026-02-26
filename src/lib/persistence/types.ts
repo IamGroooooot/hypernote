@@ -10,4 +10,6 @@ export interface NoteContainerStore {
   readContainer(noteId: string): Promise<Uint8Array>;
   writeContainer(noteId: string, bytes: Uint8Array): Promise<void>;
   moveContainerToTrash(noteId: string): Promise<void>;
+  listTrashContainers(): Promise<ReadonlyArray<Uint8Array>>;
+  permanentDeleteFromTrash(noteId: string): Promise<void>;
 }

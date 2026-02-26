@@ -87,6 +87,7 @@
   }
 
   async function bootstrap(): Promise<void> {
+    void persistence.sweepTrash(); // T-18: evict trash entries older than 30 days
     notes = sortNotes(await persistence.listMetadata());
 
     if (notes.length === 0) {

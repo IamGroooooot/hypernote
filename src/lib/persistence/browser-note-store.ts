@@ -38,6 +38,34 @@ export class BrowserNoteContainerStore implements NoteContainerStore {
     this.deleteRaw(NOTE_PREFIX, noteId);
   }
 
+  async listTrashContainers(): Promise<ReadonlyArray<Uint8Array>> {
+    return this.listContainersByPrefix(TRASH_PREFIX);
+  }
+
+  async permanentDeleteFromTrash(noteId: string): Promise<void> {
+    this.deleteRaw(TRASH_PREFIX, noteId);
+  }
+
+  private listContainersByPrefix(prefix: string): Uint8Array[] {
+    if (typeof localStorage === 'undefined') {
+      return Array.from(this.memoryStore.entries())
+        .filter(([key]) => key.startsWith(prefix))
+        .map(([, value]) => new Uint8Array(value));
+    }
+
+    const ids: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(prefix)) {
+        ids.push(key.slice(prefix.length));
+      }
+    }
+
+    return ids
+      .map((id) => this.readRaw(prefix, id))
+      .filter((v): v is Uint8Array => Boolean(v));
+  }
+
   private listNoteIds(): string[] {
     if (typeof localStorage === 'undefined') {
       return Array.from(this.memoryStore.keys())
