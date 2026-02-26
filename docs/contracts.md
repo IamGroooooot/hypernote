@@ -9,6 +9,8 @@
 - `list_notes() -> Vec<NoteMeta>`
 - `delete_note_to_trash(note_id: String) -> ()`
 - `list_peers() -> Vec<PeerInfo>`
+- `get_share_target() -> String`
+- `join_workspace(target: String) -> CommandAck`
 
 ## WebSocket Protocol
 

@@ -116,6 +116,30 @@ export async function sendToPeer(peerId: string, payload: string): Promise<boole
   return invokeWithStatus('send_to_peer', { peerId, payload });
 }
 
+export async function getShareTarget(): Promise<string> {
+  return invokeOrFallback<string>('get_share_target', undefined, '');
+}
+
+export async function joinWorkspace(target: string): Promise<CommandAck> {
+  const invoke = getInvoke();
+
+  if (!invoke) {
+    return {
+      accepted: false,
+      reason: 'tauri runtime unavailable',
+    };
+  }
+
+  try {
+    return await invoke<CommandAck>('join_workspace', { target });
+  } catch {
+    return {
+      accepted: false,
+      reason: 'join command failed',
+    };
+  }
+}
+
 export async function getLocalPeerId(): Promise<string> {
   return invokeOrFallback<string>('get_peer_id', undefined, '');
 }

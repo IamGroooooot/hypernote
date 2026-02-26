@@ -25,7 +25,9 @@
   import {
     applyLocalEdit,
     broadcastUpdate,
+    getShareTarget,
     getLocalPeerId,
+    joinWorkspace,
     listPeers,
     onPeerConnected,
     onPeerDisconnected,
@@ -56,6 +58,12 @@
   const MAX_SWIPE_VERTICAL_DRIFT_PX = 56;
   const SWIPE_VECTOR_VISIBLE_MS = 420;
   const GESTURE_COACHMARK_KEY = 'hypernote:gesture-coachmark-count';
+  const JOIN_INPUT_HINT = 'Enter host, host:port, or ws://host:port';
+  const SHARE_TARGET_HINT = 'Share this target with a collaborator on the same LAN';
+  const SHARE_TARGET_LOADING = 'Resolving local share target...';
+
+  type JoinWorkspaceStatus = 'idle' | 'joining' | 'joined' | 'error';
+  type ShareTargetStatus = 'idle' | 'copied' | 'error';
 
   let notes: NoteMeta[] = [];
   let trashNotes: NoteMeta[] = [];
@@ -77,7 +85,13 @@
   let crdtSizeWarning = false;
 
   let utilityHubOpen = false;
-  let shareInviteCode = generateInviteCode();
+  let shareWorkspaceTarget = '';
+  let shareTargetStatus: ShareTargetStatus = 'idle';
+  let shareTargetMessage = SHARE_TARGET_HINT;
+  let joinWorkspaceTarget = '';
+  let joinWorkspaceStatus: JoinWorkspaceStatus = 'idle';
+  let joinWorkspaceMessage = JOIN_INPUT_HINT;
+  let joinFocusNonce = 0;
 
   let isMobileViewport = false;
   let mobileTab: 'notes' | 'editor' = 'editor';
@@ -252,9 +266,15 @@
       return;
     }
 
+    if (matchesShortcut(event, 'join-workspace')) {
+      event.preventDefault();
+      openJoinWorkspaceFlow();
+      return;
+    }
+
     if (matchesShortcut(event, 'share-workspace')) {
       event.preventDefault();
-      handleShareWorkspace();
+      void handleShareWorkspace();
       return;
     }
 
@@ -695,13 +715,20 @@
     closePalette();
   }
 
+  function openUtilityHubPanel(): void {
+    utilityHubOpen = true;
+    desktopTocOpen = false;
+    mobileActionSheetOpen = false;
+    mobileTocOpen = false;
+  }
+
   function toggleUtilityHub(): void {
-    utilityHubOpen = !utilityHubOpen;
     if (utilityHubOpen) {
-      desktopTocOpen = false;
-      mobileActionSheetOpen = false;
-      mobileTocOpen = false;
+      utilityHubOpen = false;
+      return;
     }
+
+    openUtilityHubPanel();
   }
 
   function toggleToc(): void {
@@ -721,17 +748,162 @@
     }
   }
 
-  function handleShareWorkspace(): void {
-    utilityHubOpen = true;
-    desktopTocOpen = false;
-    mobileTocOpen = false;
-    if (shareInviteCode.length === 0) {
-      shareInviteCode = generateInviteCode();
+  function openJoinWorkspaceFlow(): void {
+    openUtilityHubPanel();
+    joinWorkspaceStatus = 'idle';
+    joinWorkspaceMessage = JOIN_INPUT_HINT;
+    joinFocusNonce += 1;
+  }
+
+  function handleJoinTargetChange(nextValue: string): void {
+    joinWorkspaceTarget = nextValue;
+    joinWorkspaceStatus = 'idle';
+    joinWorkspaceMessage = JOIN_INPUT_HINT;
+  }
+
+  async function handleJoinWorkspace(): Promise<void> {
+    const target = joinWorkspaceTarget.trim();
+    const validationError = validateJoinTarget(target);
+
+    if (validationError) {
+      joinWorkspaceStatus = 'error';
+      joinWorkspaceMessage = validationError;
+      return;
+    }
+
+    joinWorkspaceStatus = 'joining';
+    joinWorkspaceMessage = 'Sending join request...';
+
+    const ack = await joinWorkspace(target);
+    if (ack.accepted) {
+      joinWorkspaceStatus = 'joined';
+      joinWorkspaceMessage = 'Join requested. Wait for peer connection.';
+      joinWorkspaceTarget = '';
+      void refreshPeers();
+      return;
+    }
+
+    joinWorkspaceStatus = 'error';
+    joinWorkspaceMessage = ack.reason ?? 'Unable to join workspace';
+  }
+
+  async function handleShareWorkspace(): Promise<void> {
+    openUtilityHubPanel();
+    await refreshShareTarget();
+  }
+
+  async function refreshShareTarget(showLoading = true): Promise<void> {
+    if (showLoading) {
+      shareTargetStatus = 'idle';
+      shareTargetMessage = SHARE_TARGET_LOADING;
+    }
+
+    const target = (await getShareTarget()).trim();
+    if (target.length > 0) {
+      shareWorkspaceTarget = target;
+      shareTargetStatus = 'idle';
+      shareTargetMessage = SHARE_TARGET_HINT;
+      return;
+    }
+
+    shareWorkspaceTarget = '';
+    shareTargetStatus = 'error';
+    shareTargetMessage = 'Share target is available only in the Tauri app runtime.';
+  }
+
+  async function copyShareTarget(): Promise<void> {
+    if (!shareWorkspaceTarget) {
+      shareTargetStatus = 'error';
+      shareTargetMessage = 'No share target available to copy.';
+      return;
+    }
+
+    const copied = await copyTextToClipboard(shareWorkspaceTarget);
+    if (copied) {
+      shareTargetStatus = 'copied';
+      shareTargetMessage = 'Copied share target to clipboard.';
+      return;
+    }
+
+    shareTargetStatus = 'error';
+    shareTargetMessage = 'Copy failed. Please copy manually.';
+  }
+
+  async function copyTextToClipboard(text: string): Promise<boolean> {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // fallback below
+      }
+    }
+
+    if (typeof document === 'undefined') {
+      return false;
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    try {
+      return document.execCommand('copy');
+    } catch {
+      return false;
+    } finally {
+      document.body.removeChild(textarea);
     }
   }
 
-  function refreshInviteCode(): void {
-    shareInviteCode = generateInviteCode();
+  function validateJoinTarget(target: string): string | null {
+    if (!target) {
+      return 'Enter a host or ws://host:port target.';
+    }
+
+    let value = target;
+    let requirePort = false;
+
+    if (target.startsWith('ws://')) {
+      value = target.slice(5);
+      requirePort = true;
+    } else if (target.includes('://')) {
+      return 'Only ws:// scheme is supported.';
+    }
+
+    if (!value || /\s/u.test(value) || /[/?#]/u.test(value)) {
+      return 'Target contains unsupported characters.';
+    }
+
+    const separatorIndex = value.lastIndexOf(':');
+    if (separatorIndex === -1) {
+      return requirePort ? 'ws:// target must include host:port.' : null;
+    }
+
+    const host = value.slice(0, separatorIndex);
+    const portText = value.slice(separatorIndex + 1);
+    if (!host) {
+      return 'Host is missing.';
+    }
+
+    if (host.includes(':')) {
+      return 'IPv6 targets are not supported yet.';
+    }
+
+    if (!/^\d+$/u.test(portText)) {
+      return 'Port must be numeric.';
+    }
+
+    const port = Number(portText);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return 'Port must be between 1 and 65535.';
+    }
+
+    return null;
   }
 
   async function handleExportCurrentNote(): Promise<void> {
@@ -785,17 +957,16 @@
     maybeShowGestureCoachmark(true);
   }
 
-  function generateInviteCode(): string {
-    return Math.random().toString(36).slice(2, 10).toUpperCase();
-  }
-
   function runAction(actionId: PaletteActionId): void {
     switch (actionId) {
       case 'toc':
         toggleToc();
         break;
+      case 'join-workspace':
+        openJoinWorkspaceFlow();
+        break;
       case 'share-workspace':
-        handleShareWorkspace();
+        void handleShareWorkspace();
         break;
       case 'export-current':
         void handleExportCurrentNote();
@@ -1019,11 +1190,23 @@
   state={sync.state}
   peerCount={sync.peerCount}
   peers={peers}
-  inviteCode={shareInviteCode}
+  shareTarget={shareWorkspaceTarget}
+  shareStatus={shareTargetStatus}
+  shareMessage={shareTargetMessage}
+  joinTarget={joinWorkspaceTarget}
+  joinStatus={joinWorkspaceStatus}
+  joinMessage={joinWorkspaceMessage}
+  joinFocusNonce={joinFocusNonce}
   onClose={() => {
     utilityHubOpen = false;
   }}
-  onShareWorkspace={handleShareWorkspace}
+  onShareWorkspace={() => {
+    void handleShareWorkspace();
+  }}
+  onJoinTargetChange={handleJoinTargetChange}
+  onJoinWorkspace={() => {
+    void handleJoinWorkspace();
+  }}
   onExportCurrent={() => {
     void handleExportCurrentNote();
   }}
@@ -1033,7 +1216,12 @@
   onOpenPeers={() => {
     utilityHubOpen = true;
   }}
-  onRefreshInvite={refreshInviteCode}
+  onRefreshShareTarget={() => {
+    void refreshShareTarget(false);
+  }}
+  onCopyShareTarget={() => {
+    void copyShareTarget();
+  }}
 />
 
 <CommandPalette
@@ -1064,6 +1252,9 @@
   onOpenPeers={() => {
     runAction('peers');
   }}
+  onJoinWorkspace={() => {
+    runAction('join-workspace');
+  }}
   onToggleToc={() => {
     runAction('toc');
   }}
@@ -1088,9 +1279,13 @@
     mobileActionSheetOpen = false;
     mobileTocOpen = true;
   }}
+  onJoinWorkspace={() => {
+    mobileActionSheetOpen = false;
+    openJoinWorkspaceFlow();
+  }}
   onShareWorkspace={() => {
     mobileActionSheetOpen = false;
-    handleShareWorkspace();
+    void handleShareWorkspace();
   }}
   onExportCurrent={() => {
     mobileActionSheetOpen = false;

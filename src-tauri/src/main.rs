@@ -268,6 +268,41 @@ fn get_peer_id(state: tauri::State<'_, AppState>) -> String {
     state.peer_id.clone()
 }
 
+#[tauri::command]
+fn get_share_target() -> String {
+    let host = detect_local_ipv4_host()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(default_share_host);
+    format!("ws://{host}:4747")
+}
+
+#[tauri::command]
+fn join_workspace(
+    target: String,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> CommandAck {
+    let addr = match normalize_join_target(&target) {
+        Ok(value) => value,
+        Err(reason) => {
+            return CommandAck {
+                accepted: false,
+                reason: Some(reason),
+            }
+        }
+    };
+
+    let ws_peers = Arc::clone(&state.ws_peers);
+    tauri::async_runtime::spawn(async move {
+        connect_to_peer_ws(addr, app, ws_peers).await;
+    });
+
+    CommandAck {
+        accepted: true,
+        reason: None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket connection handler (shared by server-accept and client-connect)
 // ---------------------------------------------------------------------------
@@ -471,6 +506,79 @@ fn local_hostname() -> String {
         .unwrap_or_else(|| "hypernote-host".to_string())
 }
 
+fn normalize_join_target(raw: &str) -> Result<String, String> {
+    let target = raw.trim();
+    if target.is_empty() {
+        return Err("target is empty".to_string());
+    }
+
+    if let Some(without_scheme) = target.strip_prefix("ws://") {
+        return parse_host_port_target(without_scheme, true);
+    }
+
+    if target.contains("://") {
+        return Err("only ws:// scheme is supported".to_string());
+    }
+
+    parse_host_port_target(target, false)
+}
+
+fn parse_host_port_target(value: &str, require_port: bool) -> Result<String, String> {
+    if value.is_empty() {
+        return Err("target is empty".to_string());
+    }
+
+    if value
+        .chars()
+        .any(|ch| ch.is_whitespace() || matches!(ch, '/' | '?' | '#'))
+    {
+        return Err("target contains unsupported characters".to_string());
+    }
+
+    if let Some((host, port_raw)) = value.rsplit_once(':') {
+        if host.is_empty() {
+            return Err("host is missing".to_string());
+        }
+
+        if host.contains(':') {
+            return Err("target host format is invalid".to_string());
+        }
+
+        let port = match port_raw.parse::<u16>() {
+            Ok(value) if value > 0 => value,
+            _ => return Err("port must be between 1 and 65535".to_string()),
+        };
+
+        return Ok(format!("{host}:{port}"));
+    }
+
+    if require_port {
+        return Err("target must be ws://host:port".to_string());
+    }
+
+    Ok(format!("{value}:4747"))
+}
+
+fn detect_local_ipv4_host() -> Option<std::net::Ipv4Addr> {
+    use std::net::{IpAddr, UdpSocket};
+
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    match socket.local_addr().ok()?.ip() {
+        IpAddr::V4(ip) if !ip.is_loopback() => Some(ip),
+        _ => None,
+    }
+}
+
+fn default_share_host() -> String {
+    let host = local_hostname();
+    if host.contains('.') {
+        host
+    } else {
+        format!("{host}.local")
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -526,6 +634,8 @@ fn main() {
             broadcast_update,
             send_to_peer,
             get_peer_id,
+            get_share_target,
+            join_workspace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -5,6 +5,7 @@ export type PaletteActionId =
   | 'delete'
   | 'restore-mode'
   | 'peers'
+  | 'join-workspace'
   | 'share-workspace'
   | 'export-current'
   | 'export-workspace';
@@ -52,6 +53,12 @@ export const PALETTE_ACTIONS: readonly PaletteActionDescriptor[] = [
     label: '⊕ peers',
     shortcut: '⌘/Ctrl+Shift+P',
     keywords: ['peer', 'lan', 'sync'],
+  },
+  {
+    id: 'join-workspace',
+    label: '↗ join workspace',
+    shortcut: '⌘/Ctrl+Shift+J',
+    keywords: ['join', 'workspace', 'connect', 'target'],
   },
   {
     id: 'share-workspace',
@@ -140,6 +147,8 @@ export function matchesShortcut(event: KeyboardEvent, actionId: PaletteActionId)
       return mod && event.shiftKey && key === 'backspace';
     case 'peers':
       return mod && event.shiftKey && key === 'p';
+    case 'join-workspace':
+      return mod && event.shiftKey && key === 'j';
     case 'share-workspace':
       return mod && event.shiftKey && key === 's';
     case 'export-current':

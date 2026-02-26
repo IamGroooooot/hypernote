@@ -1,25 +1,58 @@
 <script lang="ts">
   import type { PeerInfo, SyncStatus } from '../lib/contracts';
 
+  type JoinStatus = 'idle' | 'joining' | 'joined' | 'error';
+  type ShareStatus = 'idle' | 'copied' | 'error';
+
   export let open = false;
   export let state: SyncStatus['state'] = 'offline';
   export let peerCount = 0;
-  export let inviteCode = '';
+  export let shareTarget = '';
+  export let shareStatus: ShareStatus = 'idle';
+  export let shareMessage = '';
   export let peers: PeerInfo[] = [];
+  export let joinTarget = '';
+  export let joinStatus: JoinStatus = 'idle';
+  export let joinMessage = '';
+  export let joinFocusNonce = 0;
   export let onClose: () => void = () => {};
   export let onShareWorkspace: () => void = () => {};
   export let onExportCurrent: () => void = () => {};
   export let onExportWorkspace: () => void = () => {};
   export let onOpenPeers: () => void = () => {};
-  export let onRefreshInvite: () => void = () => {};
+  export let onJoinTargetChange: (value: string) => void = () => {};
+  export let onJoinWorkspace: () => void = () => {};
+  export let onRefreshShareTarget: () => void = () => {};
+  export let onCopyShareTarget: () => void = () => {};
+
+  let joinInputEl: HTMLInputElement | undefined;
+  let previousJoinFocusNonce = 0;
 
   $: dotClass =
     state === 'error' ? 'error' : state === 'syncing' ? 'syncing' : state === 'connected' ? 'connected' : 'offline';
+
+  $: if (open && joinFocusNonce > previousJoinFocusNonce) {
+    previousJoinFocusNonce = joinFocusNonce;
+    setTimeout(() => {
+      joinInputEl?.focus();
+      joinInputEl?.select();
+    }, 0);
+  }
 
   function handleBackdropClick(event: MouseEvent) {
     if (event.target === event.currentTarget) {
       onClose();
     }
+  }
+
+  function handleJoinTargetInput(event: Event) {
+    const target = event.currentTarget as HTMLInputElement;
+    onJoinTargetChange(target.value);
+  }
+
+  function handleJoinSubmit(event: Event) {
+    event.preventDefault();
+    onJoinWorkspace();
   }
 </script>
 
@@ -38,6 +71,27 @@
 
       <div class="status-row">peers: {peerCount}</div>
 
+      <form class="join-form" on:submit={handleJoinSubmit}>
+        <label for="join-workspace-target">join workspace</label>
+        <div class="join-controls">
+          <input
+            id="join-workspace-target"
+            bind:this={joinInputEl}
+            type="text"
+            placeholder="host:port or ws://host:port"
+            value={joinTarget}
+            on:input={handleJoinTargetInput}
+            aria-invalid={joinStatus === 'error'}
+          />
+          <button type="submit" disabled={joinStatus === 'joining'}>
+            {joinStatus === 'joining' ? 'joining…' : 'join'}
+          </button>
+        </div>
+        <p class="join-feedback" class:error={joinStatus === 'error'} class:success={joinStatus === 'joined'}>
+          {joinMessage}
+        </p>
+      </form>
+
       <div class="actions-grid">
         <button type="button" on:click={onShareWorkspace}>share workspace</button>
         <button type="button" on:click={onExportCurrent}>export current</button>
@@ -45,12 +99,18 @@
         <button type="button" on:click={onOpenPeers}>trusted peers</button>
       </div>
 
-      <div class="invite-card">
-        <div class="invite-head">
-          <span>invite code</span>
-          <button type="button" class="ghost" on:click={onRefreshInvite}>refresh</button>
+      <div class="share-card">
+        <div class="share-head">
+          <span>share target</span>
+          <div class="share-actions">
+            <button type="button" class="ghost" on:click={onRefreshShareTarget}>refresh</button>
+            <button type="button" class="ghost" on:click={onCopyShareTarget} disabled={!shareTarget}>copy</button>
+          </div>
         </div>
-        <code>{inviteCode}</code>
+        <code>{shareTarget || 'unavailable'}</code>
+        <p class="share-feedback" class:error={shareStatus === 'error'} class:success={shareStatus === 'copied'}>
+          {shareMessage}
+        </p>
       </div>
 
       <div class="peer-list">
@@ -126,9 +186,91 @@
     padding: 3px 8px;
   }
 
+  .ghost:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
   .status-row {
     font-size: 12px;
     color: var(--text-dim);
+  }
+
+  .join-form {
+    border: var(--border);
+    border-radius: var(--radius-md);
+    padding: 8px;
+    display: grid;
+    gap: 6px;
+  }
+
+  .join-form label {
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .join-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .join-controls input {
+    border: var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    padding: 7px 8px;
+    min-width: 0;
+  }
+
+  .join-controls input:focus {
+    outline: none;
+    border-color: var(--accent-muted);
+  }
+
+  .join-controls input[aria-invalid='true'] {
+    border-color: var(--danger);
+  }
+
+  .join-controls button {
+    border: var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    padding: 7px 10px;
+  }
+
+  .join-controls button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .join-controls button:hover:enabled {
+    border-color: var(--accent-muted);
+    color: var(--accent);
+  }
+
+  .join-feedback {
+    margin: 0;
+    min-height: 16px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .join-feedback.error {
+    color: var(--danger);
+  }
+
+  .join-feedback.success {
+    color: var(--accent);
   }
 
   .actions-grid {
@@ -154,7 +296,7 @@
     color: var(--accent);
   }
 
-  .invite-card {
+  .share-card {
     border: var(--border);
     border-radius: var(--radius-md);
     padding: 8px;
@@ -162,12 +304,33 @@
     gap: 6px;
   }
 
-  .invite-head {
+  .share-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     font-size: 11px;
     color: var(--text-dim);
+  }
+
+  .share-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .share-feedback {
+    margin: 0;
+    min-height: 16px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .share-feedback.error {
+    color: var(--danger);
+  }
+
+  .share-feedback.success {
+    color: var(--accent);
   }
 
   code {

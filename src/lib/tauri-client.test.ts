@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyLocalEdit, listPeers, onPeerUpdate } from './tauri-client';
+import {
+  applyLocalEdit,
+  getShareTarget,
+  joinWorkspace,
+  listPeers,
+  onPeerUpdate,
+} from './tauri-client';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -16,6 +22,42 @@ describe('tauri client', () => {
     const result = await applyLocalEdit('note-1', new Uint8Array([1, 2]));
 
     expect(result).toBe(true);
+  });
+
+  it('returns invoke ack for join workspace', async () => {
+    const invoke = vi.fn(async () => ({ accepted: true, reason: null }));
+    installWindow({
+      __TAURI_INVOKE__: invoke,
+    });
+
+    const result = await joinWorkspace('127.0.0.1:4747');
+
+    expect(result).toEqual({ accepted: true, reason: null });
+    expect(invoke).toHaveBeenCalledWith('join_workspace', { target: '127.0.0.1:4747' });
+  });
+
+  it('reads share target from backend command', async () => {
+    const invoke = vi.fn(async () => 'ws://192.168.0.10:4747');
+    installWindow({
+      __TAURI_INVOKE__: invoke,
+    });
+
+    const result = await getShareTarget();
+
+    expect(result).toBe('ws://192.168.0.10:4747');
+    expect(invoke).toHaveBeenCalledWith('get_share_target', undefined);
+  });
+
+  it('returns empty share target fallback when tauri runtime is unavailable', async () => {
+    const result = await getShareTarget();
+    expect(result).toBe('');
+  });
+
+  it('returns safe fallback when tauri runtime is unavailable for join workspace', async () => {
+    const result = await joinWorkspace('127.0.0.1:4747');
+
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe('tauri runtime unavailable');
   });
 
   it('normalizes peer statuses from invoke payload', async () => {

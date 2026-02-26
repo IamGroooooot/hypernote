@@ -22,6 +22,7 @@
   export let onRenameNote: (noteId: string, newTitle: string) => void = () => {};
   export let onRestoreNote: (noteId: string) => void = () => {};
   export let onOpenPeers: () => void = () => {};
+  export let onJoinWorkspace: () => void = () => {};
   export let onToggleToc: () => void = () => {};
   export let onShareWorkspace: () => void = () => {};
   export let onExportCurrent: () => void = () => {};
@@ -210,6 +211,10 @@
         break;
       case 'peers':
         onOpenPeers();
+        onClose();
+        break;
+      case 'join-workspace':
+        onJoinWorkspace();
         onClose();
         break;
       case 'share-workspace':
