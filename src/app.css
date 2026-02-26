@@ -1,0 +1,133 @@
+:root {
+  --bg-base: #0a0a0f;
+  --bg-surface: #12121a;
+  --accent: #00ffcc;
+  --text: #e0e0e0;
+  --text-dim: #666680;
+  --danger: #ff4560;
+  --border: 1px solid rgba(0, 255, 204, 0.2);
+
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: var(--text);
+  background: radial-gradient(circle at top right, #152327, var(--bg-base) 42%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-rows: 48px 1fr 28px;
+  min-height: 100vh;
+}
+
+.top-bar,
+.bottom-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: var(--border);
+  background: rgba(18, 18, 26, 0.85);
+  backdrop-filter: blur(12px);
+}
+
+.bottom-bar {
+  border-top: var(--border);
+  border-bottom: none;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.top-bar h1 {
+  font-size: 14px;
+  letter-spacing: 0.2em;
+  margin: 0;
+}
+
+.top-bar button {
+  border: var(--border);
+  background: transparent;
+  color: var(--text);
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+
+.top-bar .status {
+  color: var(--accent);
+}
+
+.content {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 0;
+}
+
+.note-list {
+  border-right: var(--border);
+  background: linear-gradient(180deg, rgba(18, 18, 26, 0.95), rgba(10, 10, 15, 0.95));
+  padding: 12px;
+}
+
+.note-list h2,
+.editor-panel h2 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.note-list button {
+  width: 100%;
+  text-align: left;
+  margin-bottom: 8px;
+  border: var(--border);
+  background: transparent;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.note-list button.selected {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.editor-panel {
+  padding: 12px;
+}
+
+.editor-panel textarea {
+  width: 100%;
+  min-height: calc(100vh - 140px);
+  resize: none;
+  border: var(--border);
+  background: rgba(10, 10, 15, 0.7);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 12px;
+  font: inherit;
+}
+
+@media (max-width: 800px) {
+  .content {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .note-list {
+    border-right: none;
+    border-bottom: var(--border);
+  }
+}

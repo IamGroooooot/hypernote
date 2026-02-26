@@ -1,0 +1,28 @@
+export type PeerStatus = 'DISCOVERING' | 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED';
+
+export interface NoteMeta {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
+export interface NoteDocument {
+  meta: NoteMeta;
+  yjsState: Uint8Array;
+  markdown: string;
+}
+
+export interface PeerInfo {
+  peerId: string;
+  wsUrl: string;
+  status: PeerStatus;
+  noteIds: string[];
+}
+
+export interface SyncStatus {
+  noteId: string;
+  peerCount: number;
+  state: 'offline' | 'syncing' | 'connected' | 'error';
+}
