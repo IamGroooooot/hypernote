@@ -46,6 +46,17 @@ export class BrowserNoteContainerStore implements NoteContainerStore {
     this.deleteRaw(TRASH_PREFIX, noteId);
   }
 
+  async restoreFromTrash(noteId: string): Promise<void> {
+    const value = this.readRaw(TRASH_PREFIX, noteId);
+
+    if (!value) {
+      return;
+    }
+
+    this.writeRaw(NOTE_PREFIX, noteId, value);
+    this.deleteRaw(TRASH_PREFIX, noteId);
+  }
+
   private listContainersByPrefix(prefix: string): Uint8Array[] {
     if (typeof localStorage === 'undefined') {
       return Array.from(this.memoryStore.entries())

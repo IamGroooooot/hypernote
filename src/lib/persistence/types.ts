@@ -12,4 +12,5 @@ export interface NoteContainerStore {
   moveContainerToTrash(noteId: string): Promise<void>;
   listTrashContainers(): Promise<ReadonlyArray<Uint8Array>>;
   permanentDeleteFromTrash(noteId: string): Promise<void>;
+  restoreFromTrash(noteId: string): Promise<void>;
 }

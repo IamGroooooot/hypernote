@@ -131,13 +131,19 @@ function parseMetadata(value: string): NoteMeta {
     throw new Error('Invalid container: malformed metadata');
   }
 
-  return {
+  const result: NoteMeta = {
     id: meta.id,
     title: meta.title,
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
     deletedAt: meta.deletedAt,
   };
+
+  if (typeof meta.body === 'string') {
+    result.body = meta.body;
+  }
+
+  return result;
 }
 
 function concatBytes(left: Uint8Array, right: Uint8Array): Uint8Array {

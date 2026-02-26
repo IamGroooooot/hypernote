@@ -53,6 +53,39 @@ describe('StoreTrashMover', () => {
   });
 });
 
+describe('LocalNotePersistence.restoreFromTrash', () => {
+  it('moves note back from trash to notes and clears deletedAt', async () => {
+    const store = new InMemoryNoteContainerStore();
+    const persistence = new LocalNotePersistence(store);
+
+    await persistence.saveNow(createSnapshot('note-restore', 'Restore me', 10));
+    await persistence.moveToTrash('note-restore');
+
+    expect(store.hasNote('note-restore')).toBe(false);
+    expect(store.hasTrash('note-restore')).toBe(true);
+
+    await persistence.restoreFromTrash('note-restore');
+
+    expect(store.hasNote('note-restore')).toBe(true);
+    expect(store.hasTrash('note-restore')).toBe(false);
+
+    const restored = await persistence.open('note-restore');
+    expect(restored.meta.deletedAt).toBeNull();
+  });
+
+  it('lists trash metadata sorted by deletedAt DESC', async () => {
+    const store = new InMemoryNoteContainerStore();
+    const persistence = new LocalNotePersistence(store);
+    const now = Date.now();
+
+    store.injectTrash('note-old', createSnapshotWithDeletedAt('note-old', 'Old', now - 2000));
+    store.injectTrash('note-new', createSnapshotWithDeletedAt('note-new', 'New', now - 1000));
+
+    const listed = await persistence.listTrashMetadata();
+    expect(listed.map((m) => m.id)).toEqual(['note-new', 'note-old']);
+  });
+});
+
 describe('LocalNotePersistence.sweepTrash', () => {
   it('permanently deletes trash entries older than maxAgeDays', async () => {
     const store = new InMemoryNoteContainerStore();
@@ -117,6 +150,13 @@ class InMemoryNoteContainerStore implements NoteContainerStore {
   }
 
   async permanentDeleteFromTrash(noteId: string): Promise<void> {
+    this.trash.delete(noteId);
+  }
+
+  async restoreFromTrash(noteId: string): Promise<void> {
+    const note = this.trash.get(noteId);
+    if (!note) return;
+    this.notes.set(noteId, note);
     this.trash.delete(noteId);
   }
 

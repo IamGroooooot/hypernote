@@ -42,6 +42,7 @@
   const peerStore = createPeerStatusStore();
 
   let notes: NoteMeta[] = [];
+  let trashNotes: NoteMeta[] = [];
   let selectedId = '';
   let editorText = '';
   let paletteOpen = false;
@@ -66,7 +67,7 @@
     function handleKeydown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
-        paletteOpen = true;
+        void openPalette();
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault();
@@ -113,6 +114,11 @@
       releaseBridge();
     };
   });
+
+  async function openPalette(): Promise<void> {
+    trashNotes = await persistence.listTrashMetadata();
+    paletteOpen = true;
+  }
 
   function makeNoteMeta(id: string): NoteMeta {
     const now = Date.now();
@@ -226,6 +232,7 @@
     const nextMeta: NoteMeta = {
       ...currentMeta,
       title: titleFromText(event.text),
+      body: event.text.slice(0, 500),
       updatedAt: Date.now(),
     };
 
@@ -339,6 +346,14 @@
     }
   }
 
+  async function handleRestoreNote(noteId: string): Promise<void> {
+    await persistence.restoreFromTrash(noteId);
+    notes = sortNotes(await persistence.listMetadata());
+    trashNotes = await persistence.listTrashMetadata();
+    paletteOpen = false;
+    await selectNote(noteId);
+  }
+
   async function handleRenameNote(noteId: string, newTitle: string): Promise<void> {
     const note = notes.find((n) => n.id === noteId);
     if (!note) return;
@@ -353,7 +368,7 @@
     state={sync.state}
     peerCount={sync.peerCount}
     onOpenPalette={() => {
-      paletteOpen = true;
+      void openPalette();
     }}
   />
 
@@ -381,6 +396,7 @@
 <CommandPalette
   open={paletteOpen}
   notes={notes}
+  trashNotes={trashNotes}
   peers={peers}
   selectedNoteId={selectedId}
   onClose={() => {
@@ -399,5 +415,8 @@
   }}
   onRenameNote={(noteId, newTitle) => {
     void handleRenameNote(noteId, newTitle);
+  }}
+  onRestoreNote={(noteId) => {
+    void handleRestoreNote(noteId);
   }}
 />

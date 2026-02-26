@@ -55,6 +55,38 @@ export class LocalNotePersistence {
     await this.trashMover.move(noteId);
   }
 
+  async listTrashMetadata(): Promise<NoteMeta[]> {
+    const containers = await this.store.listTrashContainers();
+    const metadata: NoteMeta[] = [];
+
+    for (const bytes of containers) {
+      try {
+        metadata.push(decodeNoteMetadata(bytes));
+      } catch {
+        // Skip corrupted containers.
+      }
+    }
+
+    return metadata.sort((left, right) => (right.deletedAt ?? 0) - (left.deletedAt ?? 0));
+  }
+
+  async restoreFromTrash(noteId: string): Promise<void> {
+    await this.store.restoreFromTrash(noteId);
+
+    // Clear deletedAt stamp so the restored note behaves as active.
+    try {
+      const bytes = await this.store.readContainer(noteId);
+      const decoded = decodeNoteContainer(bytes);
+      if (decoded.meta.deletedAt !== null) {
+        const restoredMeta: NoteMeta = { ...decoded.meta, deletedAt: null };
+        const encoded = encodeNoteContainer(restoredMeta, decoded.yjsState);
+        await this.store.writeContainer(noteId, encoded.bytes);
+      }
+    } catch {
+      // Best-effort stamp clearing; restored note may still have deletedAt set.
+    }
+  }
+
   async sweepTrash(maxAgeDays = 30): Promise<void> {
     const cutoffMs = maxAgeDays * 24 * 60 * 60 * 1000;
     const now = Date.now();

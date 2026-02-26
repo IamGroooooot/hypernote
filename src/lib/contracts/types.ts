@@ -6,6 +6,7 @@ export interface NoteMeta {
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
+  body?: string;
 }
 
 export interface NoteDocument {

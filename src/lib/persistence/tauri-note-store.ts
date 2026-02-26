@@ -112,4 +112,21 @@ export class TauriNoteContainerStore implements NoteContainerStore {
       await remove(path);
     }
   }
+
+  async restoreFromTrash(noteId: string): Promise<void> {
+    const trashDir = await this.getTrashDir();
+    const notesDir = await this.getNotesDir();
+
+    const src = `${trashDir}/${noteId}.yjs`;
+    const srcExists = await exists(src);
+
+    if (!srcExists) return;
+
+    const notesDirExists = await exists(notesDir);
+    if (!notesDirExists) {
+      await mkdir(notesDir, { recursive: true });
+    }
+
+    await rename(src, `${notesDir}/${noteId}.yjs`);
+  }
 }
