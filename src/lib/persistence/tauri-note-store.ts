@@ -4,7 +4,10 @@ import { exists, mkdir, readDir, readFile, remove, rename, writeFile } from '@ta
 import type { NoteContainerStore } from './types';
 
 export function isTauriEnv(): boolean {
-  return typeof window !== 'undefined' && '__TAURI__' in window;
+  return (
+    typeof window !== 'undefined' &&
+    ('__TAURI__' in window || '__TAURI_INTERNALS__' in window || '__TAURI_INVOKE__' in window)
+  );
 }
 
 export class TauriNoteContainerStore implements NoteContainerStore {
