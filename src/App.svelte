@@ -148,6 +148,7 @@
   $: showMobileTabs = isMobileViewport && mobileTab === 'notes';
   $: tocHeadings = parseMarkdownToc(editorText);
   $: activeTocHeadingId = findActiveHeadingId(tocHeadings, cursorOffset);
+  $: connectedPeerCount = peers.filter((peer) => peer.status.toUpperCase() === 'CONNECTED').length;
 
   onMount(() => {
     void bootstrap();
@@ -1416,7 +1417,7 @@
   {#if !isMobileViewport || mobileTab === 'notes'}
     <TopBar
       state={sync.state}
-      peerCount={sync.peerCount}
+      peerCount={connectedPeerCount}
       compactDock={focusMode && !utilityHubOpen}
       tocOpen={desktopTocOpen}
       onOpenPalette={() => {
@@ -1465,7 +1466,7 @@
   </main>
 
   {#if !isMobileViewport || mobileTab === 'notes'}
-    <StatusBar text={editorText} peerCount={sync.peerCount} state={sync.state} />
+    <StatusBar text={editorText} peerCount={connectedPeerCount} state={sync.state} />
   {/if}
 
   {#if showGestureCoachmark && isMobileViewport && mobileTab === 'editor'}
@@ -1497,7 +1498,7 @@
   open={utilityHubOpen}
   state={sync.state}
   runtimeRole={RUNTIME_ROLE_LABEL}
-  peerCount={sync.peerCount}
+  peerCount={connectedPeerCount}
   peers={peers}
   shareTarget={shareWorkspaceTarget}
   shareStatus={shareTargetStatus}
