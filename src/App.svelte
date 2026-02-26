@@ -16,7 +16,26 @@
   import { LocalNotePersistence } from './lib/persistence/local-note-persistence';
   import { isTauriEnv, TauriNoteContainerStore } from './lib/persistence/tauri-note-store';
   import { createPeerStatusStore } from './lib/stores/peer-status';
-  import { applyLocalEdit, listPeers, onPeerUpdate } from './lib/tauri-client';
+  import {
+    applyLocalEdit,
+    broadcastUpdate,
+    getLocalPeerId,
+    listPeers,
+    onPeerConnected,
+    onPeerDisconnected,
+    onPeerUpdate,
+    onWsMessage,
+    sendToPeer,
+    type PeerConnectedEvent,
+    type WsMessageEvent,
+  } from './lib/tauri-client';
+  import {
+    createHelloFrame,
+    createUpdateFrame,
+    decodeBinaryPayload,
+    decodeFrameMessage,
+    serializeFrame,
+  } from './lib/sync/frame';
 
   const store = isTauriEnv() ? new TauriNoteContainerStore() : new BrowserNoteContainerStore();
   const persistence = new LocalNotePersistence(store);
@@ -27,6 +46,7 @@
   let editorText = '';
   let paletteOpen = false;
   let peers: PeerInfo[] = [];
+  let myPeerId = '';
   let sync: SyncStatus = {
     noteId: '',
     peerCount: 0,
@@ -38,6 +58,10 @@
 
   onMount(() => {
     void bootstrap();
+
+    void getLocalPeerId().then((id) => {
+      myPeerId = id;
+    });
 
     function handleKeydown(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -51,6 +75,7 @@
     }
     window.addEventListener('keydown', handleKeydown);
 
+    // Legacy: Tauri apply_peer_update command path (fallback / backward-compat).
     const stopPeerUpdateSubscription = onPeerUpdate((event) => {
       if (!bridge || event.noteId !== selectedId) {
         return;
@@ -58,8 +83,20 @@
 
       peerStore.markSyncStarted(event.noteId);
       sync = peerStore.syncStatus(event.noteId);
-
       bridge.applyPeerUpdate(Uint8Array.from(event.update));
+    });
+
+    // WS peer lifecycle events.
+    const stopPeerConnected = onPeerConnected((event) => {
+      void handlePeerConnected(event);
+    });
+    const stopPeerDisconnected = onPeerDisconnected((event) => {
+      peerStore.removePeer(event.peerId);
+      peers = peerStore.peersForNote('');
+      sync = peerStore.syncStatus(selectedId);
+    });
+    const stopWsMessage = onWsMessage((event) => {
+      void handleWsMessage(event);
     });
 
     const refreshInterval = setInterval(() => {
@@ -69,6 +106,9 @@
     return () => {
       window.removeEventListener('keydown', handleKeydown);
       stopPeerUpdateSubscription();
+      stopPeerConnected();
+      stopPeerDisconnected();
+      stopWsMessage();
       clearInterval(refreshInterval);
       releaseBridge();
     };
@@ -162,6 +202,12 @@
     }
 
     sync = peerStore.syncStatus(selectedId);
+
+    // Broadcast delta to all connected WS peers (T-03, T-09).
+    if (myPeerId) {
+      const frame = createUpdateFrame(selectedId, myPeerId, update);
+      void broadcastUpdate(serializeFrame(frame));
+    }
   }
 
   async function handleBridgeChange(event: TextChangeEvent): Promise<void> {
@@ -193,6 +239,54 @@
     if (event.source === 'remote') {
       peerStore.markSyncCompleted(selectedId);
       sync = peerStore.syncStatus(selectedId);
+    }
+  }
+
+  async function handlePeerConnected(event: PeerConnectedEvent): Promise<void> {
+    peerStore.upsertPeer({
+      peerId: event.peerId,
+      wsUrl: `ws://${event.addr}`,
+      status: 'CONNECTED',
+      noteIds: [],
+    });
+    peers = peerStore.peersForNote('');
+    sync = peerStore.syncStatus(selectedId);
+
+    if (!selectedId || !bridge || !myPeerId) return;
+
+    // Exchange hello + full state for the currently open note.
+    const helloFrame = createHelloFrame('', myPeerId, [selectedId]);
+    await sendToPeer(event.peerId, serializeFrame(helloFrame));
+
+    const fullState = bridge.encodeStateAsUpdate();
+    const updateFrame = createUpdateFrame(selectedId, myPeerId, fullState);
+    await sendToPeer(event.peerId, serializeFrame(updateFrame));
+  }
+
+  async function handleWsMessage(event: WsMessageEvent): Promise<void> {
+    const result = decodeFrameMessage(event.payload);
+    if (!result.ok) return;
+
+    const { frame } = result;
+
+    if (frame.type === 'hello') {
+      const payload = frame.payload as { openNoteIds: string[] };
+      peerStore.setPeerNoteIds(event.peerId, payload.openNoteIds);
+      sync = peerStore.syncStatus(selectedId);
+
+      // Respond with our full state for any note the peer has open.
+      if (bridge && myPeerId && payload.openNoteIds.includes(selectedId)) {
+        const fullState = bridge.encodeStateAsUpdate();
+        const updateFrame = createUpdateFrame(selectedId, myPeerId, fullState);
+        await sendToPeer(event.peerId, serializeFrame(updateFrame));
+      }
+    }
+
+    if (frame.type === 'update' && frame.noteId === selectedId && bridge) {
+      const bytes = decodeBinaryPayload(frame.payload as { bytes: number[] });
+      peerStore.markSyncStarted(selectedId);
+      sync = peerStore.syncStatus(selectedId);
+      bridge.applyPeerUpdate(bytes);
     }
   }
 

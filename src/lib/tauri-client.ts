@@ -104,6 +104,103 @@ export async function listPeers(): Promise<PeerInfo[]> {
   }));
 }
 
+// ---------------------------------------------------------------------------
+// WS sync commands
+// ---------------------------------------------------------------------------
+
+export async function broadcastUpdate(payload: string): Promise<boolean> {
+  return invokeWithStatus('broadcast_update', { payload });
+}
+
+export async function sendToPeer(peerId: string, payload: string): Promise<boolean> {
+  return invokeWithStatus('send_to_peer', { peerId, payload });
+}
+
+export async function getLocalPeerId(): Promise<string> {
+  return invokeOrFallback<string>('get_peer_id', undefined, '');
+}
+
+export interface PeerConnectedEvent {
+  peerId: string;
+  addr: string;
+}
+
+export interface PeerDisconnectedEvent {
+  peerId: string;
+}
+
+export interface WsMessageEvent {
+  peerId: string;
+  payload: string;
+}
+
+export function onPeerConnected(listener: (event: PeerConnectedEvent) => void): () => void {
+  return createTauriEventListener('hypernote://peer-connected', listener, isPeerConnectedEvent);
+}
+
+export function onPeerDisconnected(listener: (event: PeerDisconnectedEvent) => void): () => void {
+  return createTauriEventListener(
+    'hypernote://peer-disconnected',
+    listener,
+    isPeerDisconnectedEvent,
+  );
+}
+
+export function onWsMessage(listener: (event: WsMessageEvent) => void): () => void {
+  return createTauriEventListener('hypernote://ws-message', listener, isWsMessageEvent);
+}
+
+function createTauriEventListener<T>(
+  eventName: string,
+  listener: (event: T) => void,
+  validator: (payload: unknown) => payload is T,
+): () => void {
+  const tauriListen = getListen();
+
+  if (!tauriListen) {
+    return () => {};
+  }
+
+  let stop: (() => void) | null = null;
+  let active = true;
+
+  void tauriListen(eventName, (event) => {
+    if (validator(event.payload)) {
+      listener(event.payload);
+    }
+  }).then((unlisten) => {
+    if (!active) {
+      unlisten();
+      return;
+    }
+
+    stop = unlisten;
+  });
+
+  return () => {
+    active = false;
+    stop?.();
+  };
+}
+
+function isPeerConnectedEvent(payload: unknown): payload is PeerConnectedEvent {
+  if (!payload || typeof payload !== 'object') return false;
+  const v = payload as Record<string, unknown>;
+  return typeof v.peerId === 'string' && typeof v.addr === 'string';
+}
+
+function isPeerDisconnectedEvent(payload: unknown): payload is PeerDisconnectedEvent {
+  if (!payload || typeof payload !== 'object') return false;
+  const v = payload as Record<string, unknown>;
+  return typeof v.peerId === 'string';
+}
+
+function isWsMessageEvent(payload: unknown): payload is WsMessageEvent {
+  if (!payload || typeof payload !== 'object') return false;
+  const v = payload as Record<string, unknown>;
+  return typeof v.peerId === 'string' && typeof v.payload === 'string';
+}
+
 export function onPeerUpdate(listener: (event: PeerUpdateEvent) => void): () => void {
   const tauriListen = getListen();
 

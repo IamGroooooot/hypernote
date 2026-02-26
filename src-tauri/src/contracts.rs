@@ -40,3 +40,23 @@ pub struct PeerUpdateEvent {
     pub note_id: String,
     pub update: Vec<u8>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerConnectedEvent {
+    pub peer_id: String,
+    pub addr: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerDisconnectedEvent {
+    pub peer_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WsMessageEvent {
+    pub peer_id: String,
+    pub payload: String,
+}
