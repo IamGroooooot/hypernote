@@ -443,7 +443,12 @@
   }
 
   async function openPalette(mode: 'none' | 'restore' | 'rename' = 'none'): Promise<void> {
-    trashNotes = await persistence.listTrashMetadata();
+    try {
+      trashNotes = await persistence.listTrashMetadata();
+    } catch (error) {
+      console.error('[hypernote] failed to load trash notes for palette', error);
+      trashNotes = [];
+    }
     paletteMode = mode;
     paletteModeNonce += 1;
     paletteOpen = true;
@@ -515,23 +520,24 @@
   async function createNote(): Promise<void> {
     const meta = makeNoteMeta(createNoteId());
 
-    notes = sortNotes([meta, ...notes]);
-
     const initialBridge = createTextareaYjsBridge(meta.id);
-    await persistence.saveNow({
-      meta,
-      yjsState: initialBridge.encodeStateAsUpdate(),
-    });
-    initialBridge.destroy();
+    try {
+      await persistence.saveNow({
+        meta,
+        yjsState: initialBridge.encodeStateAsUpdate(),
+      });
+    } finally {
+      initialBridge.destroy();
+    }
 
+    notes = sortNotes([meta, ...notes]);
     await selectNote(meta.id);
   }
 
   async function selectNote(noteId: string): Promise<void> {
+    const snapshot = await persistence.open(noteId);
     selectedId = noteId;
     peerStore.setActiveNote(noteId);
-
-    const snapshot = await persistence.open(noteId);
 
     releaseBridge();
     bridge = createTextareaYjsBridge(noteId, { initialUpdate: snapshot.yjsState });

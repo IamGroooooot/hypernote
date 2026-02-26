@@ -1,4 +1,4 @@
-import { appDataDir } from '@tauri-apps/api/path';
+import { appDataDir, join as joinPath } from '@tauri-apps/api/path';
 import { exists, mkdir, readDir, readFile, remove, rename, writeFile } from '@tauri-apps/plugin-fs';
 
 import type { NoteContainerStore } from './types';
@@ -17,7 +17,7 @@ export class TauriNoteContainerStore implements NoteContainerStore {
   private async getNotesDir(): Promise<string> {
     if (!this.notesDir) {
       const base = await appDataDir();
-      this.notesDir = `${base}notes`;
+      this.notesDir = await joinPath(base, 'notes');
     }
     return this.notesDir;
   }
@@ -25,7 +25,7 @@ export class TauriNoteContainerStore implements NoteContainerStore {
   private async getTrashDir(): Promise<string> {
     if (!this.trashDir) {
       const base = await appDataDir();
-      this.trashDir = `${base}trash`;
+      this.trashDir = await joinPath(base, 'trash');
     }
     return this.trashDir;
   }
@@ -40,7 +40,8 @@ export class TauriNoteContainerStore implements NoteContainerStore {
 
     for (const entry of entries) {
       if (entry.name?.endsWith('.yjs')) {
-        const bytes = await readFile(`${dir}/${entry.name}`);
+        const path = await joinPath(dir, entry.name);
+        const bytes = await readFile(path);
         results.push(bytes);
       }
     }
@@ -50,7 +51,7 @@ export class TauriNoteContainerStore implements NoteContainerStore {
 
   async readContainer(noteId: string): Promise<Uint8Array> {
     const dir = await this.getNotesDir();
-    const path = `${dir}/${noteId}.yjs`;
+    const path = await joinPath(dir, `${noteId}.yjs`);
     const fileExists = await exists(path);
 
     if (!fileExists) {
@@ -68,14 +69,15 @@ export class TauriNoteContainerStore implements NoteContainerStore {
       await mkdir(dir, { recursive: true });
     }
 
-    await writeFile(`${dir}/${noteId}.yjs`, bytes);
+    const path = await joinPath(dir, `${noteId}.yjs`);
+    await writeFile(path, bytes);
   }
 
   async moveContainerToTrash(noteId: string): Promise<void> {
     const notesDir = await this.getNotesDir();
     const trashDir = await this.getTrashDir();
 
-    const src = `${notesDir}/${noteId}.yjs`;
+    const src = await joinPath(notesDir, `${noteId}.yjs`);
     const srcExists = await exists(src);
 
     if (!srcExists) return;
@@ -85,7 +87,8 @@ export class TauriNoteContainerStore implements NoteContainerStore {
       await mkdir(trashDir, { recursive: true });
     }
 
-    await rename(src, `${trashDir}/${noteId}.yjs`);
+    const dst = await joinPath(trashDir, `${noteId}.yjs`);
+    await rename(src, dst);
   }
 
   async listTrashContainers(): Promise<ReadonlyArray<Uint8Array>> {
@@ -98,7 +101,8 @@ export class TauriNoteContainerStore implements NoteContainerStore {
 
     for (const entry of entries) {
       if (entry.name?.endsWith('.yjs')) {
-        const bytes = await readFile(`${dir}/${entry.name}`);
+        const path = await joinPath(dir, entry.name);
+        const bytes = await readFile(path);
         results.push(bytes);
       }
     }
@@ -108,7 +112,7 @@ export class TauriNoteContainerStore implements NoteContainerStore {
 
   async permanentDeleteFromTrash(noteId: string): Promise<void> {
     const dir = await this.getTrashDir();
-    const path = `${dir}/${noteId}.yjs`;
+    const path = await joinPath(dir, `${noteId}.yjs`);
     const fileExists = await exists(path);
 
     if (fileExists) {
@@ -120,7 +124,7 @@ export class TauriNoteContainerStore implements NoteContainerStore {
     const trashDir = await this.getTrashDir();
     const notesDir = await this.getNotesDir();
 
-    const src = `${trashDir}/${noteId}.yjs`;
+    const src = await joinPath(trashDir, `${noteId}.yjs`);
     const srcExists = await exists(src);
 
     if (!srcExists) return;
@@ -130,6 +134,7 @@ export class TauriNoteContainerStore implements NoteContainerStore {
       await mkdir(notesDir, { recursive: true });
     }
 
-    await rename(src, `${notesDir}/${noteId}.yjs`);
+    const dst = await joinPath(notesDir, `${noteId}.yjs`);
+    await rename(src, dst);
   }
 }
