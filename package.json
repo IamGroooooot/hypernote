@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
-    "lint": "npm run check",
+    "lint": "npm run check && npm run lint:ds",
+    "lint:ds": "node scripts/check-design-system.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
@@ -28,6 +29,8 @@
   },
   "dependencies": {
     "@tauri-apps/plugin-fs": "^2.4.5",
+    "jspdf": "^4.2.0",
+    "jszip": "^3.10.1",
     "yjs": "^13.6.29"
   }
 }

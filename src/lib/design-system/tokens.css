@@ -1,0 +1,22 @@
+:root {
+  --color-black-900: #0a0a0f;
+  --color-surface-800: #12121a;
+  --color-surface-700: #1a1a24;
+  --color-cyan-400: #00ffcc;
+  --color-cyan-500: #00bfa5;
+  --color-gray-100: #e0e0e0;
+  --color-gray-500: #666680;
+  --color-red-500: #ff4560;
+
+  --alpha-border-soft: 0.2;
+  --alpha-accent-soft: 0.08;
+  --alpha-overlay-strong: 0.7;
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-round: 999px;
+
+  --shadow-elevated: 0 8px 24px rgba(0, 0, 0, 0.35);
+}

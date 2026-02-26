@@ -2,16 +2,22 @@
   export let title = 'Untitled';
   export let value = '';
   export let crdtSizeWarning = false;
+  export let showTitle = true;
   export let onInput: (nextValue: string) => void = () => {};
+  export let onTouchStart: (event: TouchEvent) => void = () => {};
+  export let onTouchEnd: (event: TouchEvent) => void = () => {};
 </script>
 
-<section class="editor-panel">
+<!-- svelte-ignore a11y-no-static-element-interactions -->
+<section class="editor-panel" on:touchstart={onTouchStart} on:touchend={onTouchEnd}>
   {#if crdtSizeWarning}
-    <div class="crdt-warning">
-      ⚠ CRDT state exceeds 100 MB — editor performance may degrade
-    </div>
+    <div class="crdt-warning">⚠ CRDT state exceeds 100 MB — editor performance may degrade</div>
   {/if}
-  <h2>{title}</h2>
+
+  {#if showTitle}
+    <h2>{title}</h2>
+  {/if}
+
   <textarea
     value={value}
     placeholder="Type fast. Persist in 500ms."
@@ -24,8 +30,8 @@
 <style>
   .crdt-warning {
     padding: 6px 16px;
-    background: rgba(255, 69, 96, 0.12);
-    border-bottom: 1px solid rgba(255, 69, 96, 0.4);
+    background: var(--danger-subtle);
+    border-bottom: var(--danger-border);
     color: var(--danger);
     font-size: 11px;
     letter-spacing: 0.05em;

@@ -1,49 +1,83 @@
 <script lang="ts">
   import type { NoteMeta, PeerInfo } from '../lib/contracts';
+  import {
+    PALETTE_ACTIONS,
+    filterActionByContext,
+    matchesActionQuery,
+    type PaletteActionDescriptor,
+    type PaletteActionId,
+  } from '../lib/ui/actions';
 
   export let open = false;
   export let notes: NoteMeta[] = [];
   export let trashNotes: NoteMeta[] = [];
   export let peers: PeerInfo[] = [];
   export let selectedNoteId = '';
+  export let forceMode: 'none' | 'restore' | 'rename' = 'none';
+  export let modeNonce = 0;
   export let onClose: () => void = () => {};
   export let onNewNote: () => void = () => {};
   export let onSelectNote: (noteId: string) => void = () => {};
   export let onDeleteNote: (noteId: string) => void = () => {};
   export let onRenameNote: (noteId: string, newTitle: string) => void = () => {};
   export let onRestoreNote: (noteId: string) => void = () => {};
+  export let onOpenPeers: () => void = () => {};
+  export let onShareWorkspace: () => void = () => {};
+  export let onExportCurrent: () => void = () => {};
+  export let onExportWorkspace: () => void = () => {};
 
   let query = '';
   let focusedIndex = 0;
   let renaming = false;
   let renameValue = '';
+  let renameNoteId = '';
   let restoreMode = false;
+  let wasOpen = false;
   let inputEl: HTMLInputElement | undefined;
   let renameInputEl: HTMLInputElement | undefined;
 
   $: connectedPeers = peers.filter((p) => p.status === 'CONNECTED').length;
 
-  $: actions = buildActions(selectedNoteId, connectedPeers, trashNotes.length);
+  $: actions = PALETTE_ACTIONS.map((action) =>
+    filterActionByContext(action, {
+      hasSelectedNote: selectedNoteId.length > 0,
+      trashCount: trashNotes.length,
+      connectedPeers,
+    }),
+  ).filter(Boolean) as PaletteActionDescriptor[];
 
-  function buildActions(noteId: string, peerCount: number, trashCount: number) {
-    const items: { label: string; shortcut?: string; action: string }[] = [
-      { label: '◈ new note', shortcut: '⌘N', action: 'new-note' },
-    ];
-    if (noteId) {
-      items.push({ label: '✎ rename note', action: 'rename' });
-      items.push({ label: '⌦ delete note → trash', action: 'delete' });
-    }
-    if (trashCount > 0) {
-      items.push({ label: `↩ restore from trash (${trashCount})`, action: 'restore-mode' });
-    }
-    items.push({
-      label: `⊕ peers (${peerCount} connected)`,
-      action: 'peers',
-    });
-    return items;
+  $: filteredActions = actions.filter((action) => matchesActionQuery(action, query));
+  $: filteredNotes = filterNotes(notes, query);
+
+  $: totalItems = restoreMode ? trashNotes.length : filteredActions.length + filteredNotes.length;
+
+  $: if (focusedIndex >= totalItems) {
+    focusedIndex = Math.max(0, totalItems - 1);
   }
 
-  $: filteredNotes = filterNotes(notes, query);
+  $: if (open && !wasOpen) {
+    query = '';
+    focusedIndex = 0;
+    renaming = false;
+    renameValue = '';
+    renameNoteId = '';
+    restoreMode = false;
+    setTimeout(() => inputEl?.focus(), 0);
+  }
+
+  $: wasOpen = open;
+
+  $: if (open && modeNonce > 0) {
+    if (forceMode === 'restore') {
+      restoreMode = true;
+      renaming = false;
+      focusedIndex = 0;
+    }
+
+    if (forceMode === 'rename' && selectedNoteId) {
+      startRenameMode();
+    }
+  }
 
   function filterNotes(allNotes: NoteMeta[], q: string): { note: NoteMeta; badge: string }[] {
     if (!q.trim()) {
@@ -54,58 +88,41 @@
     const fuzzyMatches: { note: NoteMeta; badge: string }[] = [];
     const substringMatches: { note: NoteMeta; badge: string }[] = [];
 
-    for (const n of allNotes) {
-      const title = n.title.toLowerCase();
+    for (const note of allNotes) {
+      const title = note.title.toLowerCase();
       if (fuzzyMatch(title, lower)) {
-        fuzzyMatches.push({ note: n, badge: 'fuzzy' });
+        fuzzyMatches.push({ note, badge: 'fuzzy' });
       } else if (title.includes(lower)) {
-        substringMatches.push({ note: n, badge: 'substring' });
+        substringMatches.push({ note, badge: 'substring' });
       }
     }
 
     if (fuzzyMatches.length > 0) return fuzzyMatches;
     if (substringMatches.length > 0) return substringMatches;
 
-    // Body fallback (T-12)
     const bodyMatches: { note: NoteMeta; badge: string }[] = [];
-    for (const n of allNotes) {
-      const body = n.body?.toLowerCase() ?? '';
+    for (const note of allNotes) {
+      const body = note.body?.toLowerCase() ?? '';
       if (body.includes(lower)) {
-        bodyMatches.push({ note: n, badge: `본문 매치: ${q}` });
+        bodyMatches.push({ note, badge: `본문 매치: ${q}` });
       }
     }
+
     return bodyMatches;
   }
 
   function fuzzyMatch(text: string, pattern: string): boolean {
-    let ti = 0;
-    for (let pi = 0; pi < pattern.length; pi++) {
-      const found = text.indexOf(pattern[pi], ti);
+    let textIndex = 0;
+    for (let patternIndex = 0; patternIndex < pattern.length; patternIndex++) {
+      const found = text.indexOf(pattern[patternIndex], textIndex);
       if (found === -1) return false;
-      ti = found + 1;
+      textIndex = found + 1;
     }
     return true;
   }
 
-  $: totalItems = restoreMode
-    ? trashNotes.length
-    : actions.length + filteredNotes.length;
-
-  $: if (focusedIndex >= totalItems) {
-    focusedIndex = Math.max(0, totalItems - 1);
-  }
-
-  $: if (open) {
-    query = '';
-    focusedIndex = 0;
-    renaming = false;
-    renameValue = '';
-    restoreMode = false;
-    setTimeout(() => inputEl?.focus(), 0);
-  }
-
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.key === 'Escape') {
       if (renaming) {
         renaming = false;
       } else if (restoreMode) {
@@ -118,24 +135,24 @@
     }
 
     if (renaming) {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        if (renameValue.trim()) {
-          onRenameNote(selectedNoteId, renameValue.trim());
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        if (renameValue.trim() && renameNoteId) {
+          onRenameNote(renameNoteId, renameValue.trim());
         }
-        renaming = false;
+        onClose();
       }
       return;
     }
 
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
       focusedIndex = (focusedIndex + 1) % Math.max(1, totalItems);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
       focusedIndex = (focusedIndex - 1 + Math.max(1, totalItems)) % Math.max(1, totalItems);
-    } else if (e.key === 'Enter') {
-      e.preventDefault();
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
       selectItem(focusedIndex);
     }
   }
@@ -145,46 +162,87 @@
       const note = trashNotes[index];
       if (note) {
         onRestoreNote(note.id);
+        onClose();
       }
       return;
     }
 
-    if (index < actions.length) {
-      const action = actions[index];
-      switch (action.action) {
-        case 'new-note':
-          onNewNote();
-          break;
-        case 'rename':
-          renaming = true;
-          renameValue = notes.find((n) => n.id === selectedNoteId)?.title ?? '';
-          setTimeout(() => {
-            renameInputEl?.focus();
-            renameInputEl?.select();
-          }, 0);
-          break;
-        case 'delete':
-          onDeleteNote(selectedNoteId);
-          break;
-        case 'restore-mode':
-          restoreMode = true;
-          focusedIndex = 0;
-          break;
-        case 'peers':
-          // Informational only.
-          break;
+    if (index < filteredActions.length) {
+      const action = filteredActions[index];
+      if (action) {
+        executeAction(action.id);
       }
-    } else {
-      const noteIndex = index - actions.length;
-      const entry = filteredNotes[noteIndex];
-      if (entry) {
-        onSelectNote(entry.note.id);
-      }
+      return;
+    }
+
+    const noteIndex = index - filteredActions.length;
+    const entry = filteredNotes[noteIndex];
+    if (entry) {
+      onSelectNote(entry.note.id);
+      onClose();
     }
   }
 
-  function handleBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) {
+  function executeAction(actionId: PaletteActionId) {
+    switch (actionId) {
+      case 'new-note':
+        onNewNote();
+        onClose();
+        break;
+      case 'rename':
+        startRenameMode();
+        break;
+      case 'delete':
+        if (selectedNoteId) {
+          onDeleteNote(selectedNoteId);
+        }
+        onClose();
+        break;
+      case 'restore-mode':
+        restoreMode = true;
+        query = '';
+        focusedIndex = 0;
+        break;
+      case 'peers':
+        onOpenPeers();
+        onClose();
+        break;
+      case 'share-workspace':
+        onShareWorkspace();
+        onClose();
+        break;
+      case 'export-current':
+        onExportCurrent();
+        onClose();
+        break;
+      case 'export-workspace':
+        onExportWorkspace();
+        onClose();
+        break;
+      default:
+        break;
+    }
+  }
+
+  function startRenameMode() {
+    const targetId = selectedNoteId || notes[0]?.id || '';
+    if (!targetId) {
+      return;
+    }
+
+    renaming = true;
+    restoreMode = false;
+    renameNoteId = targetId;
+    renameValue = notes.find((note) => note.id === targetId)?.title ?? '';
+
+    setTimeout(() => {
+      renameInputEl?.focus();
+      renameInputEl?.select();
+    }, 0);
+  }
+
+  function handleBackdropClick(event: MouseEvent) {
+    if (event.target === event.currentTarget) {
       onClose();
     }
   }
@@ -205,12 +263,7 @@
       <div class="palette-input">
         <span class="palette-input-icon">⌘</span>
         {#if renaming}
-          <input
-            bind:this={renameInputEl}
-            bind:value={renameValue}
-            placeholder="New title..."
-            type="text"
-          />
+          <input bind:this={renameInputEl} bind:value={renameValue} placeholder="New title..." type="text" />
         {:else}
           <input
             bind:this={inputEl}
@@ -230,14 +283,10 @@
           {#if trashNotes.length === 0}
             <div class="palette-empty">Trash is empty</div>
           {:else}
-            {#each trashNotes as note, i}
+            {#each trashNotes as note, index}
               <!-- svelte-ignore a11y-click-events-have-key-events -->
               <!-- svelte-ignore a11y-no-static-element-interactions -->
-              <div
-                class="palette-item"
-                class:focused={focusedIndex === i}
-                on:click={() => selectItem(i)}
-              >
+              <div class="palette-item" class:focused={focusedIndex === index} on:click={() => selectItem(index)}>
                 <span>{note.title}</span>
                 {#if note.deletedAt}
                   <span class="badge">{formatAge(note.deletedAt)}</span>
@@ -246,31 +295,32 @@
             {/each}
           {/if}
         {:else if !renaming}
-          <div class="palette-section-label">ACTIONS</div>
-          {#each actions as action, i}
-            <!-- svelte-ignore a11y-click-events-have-key-events -->
-            <!-- svelte-ignore a11y-no-static-element-interactions -->
-            <div
-              class="palette-item"
-              class:focused={focusedIndex === i}
-              on:click={() => selectItem(i)}
-            >
-              <span>{action.label}</span>
-              {#if action.shortcut}
+          {#if filteredActions.length > 0}
+            <div class="palette-section-label">ACTIONS</div>
+            {#each filteredActions as action, index}
+              <!-- svelte-ignore a11y-click-events-have-key-events -->
+              <!-- svelte-ignore a11y-no-static-element-interactions -->
+              <button
+                type="button"
+                class="palette-item"
+                class:focused={focusedIndex === index}
+                on:click={() => executeAction(action.id)}
+              >
+                <span>{action.label}</span>
                 <span class="shortcut">{action.shortcut}</span>
-              {/if}
-            </div>
-          {/each}
+              </button>
+            {/each}
+          {/if}
 
           {#if filteredNotes.length > 0}
             <div class="palette-section-label">NOTES</div>
-            {#each filteredNotes as entry, i}
+            {#each filteredNotes as entry, index}
               <!-- svelte-ignore a11y-click-events-have-key-events -->
               <!-- svelte-ignore a11y-no-static-element-interactions -->
               <div
                 class="palette-item"
-                class:focused={focusedIndex === actions.length + i}
-                on:click={() => selectItem(actions.length + i)}
+                class:focused={focusedIndex === filteredActions.length + index}
+                on:click={() => selectItem(filteredActions.length + index)}
               >
                 <span>{entry.note.title}</span>
                 {#if entry.badge}
@@ -278,6 +328,10 @@
                 {/if}
               </div>
             {/each}
+          {/if}
+
+          {#if filteredActions.length === 0 && filteredNotes.length === 0}
+            <div class="palette-empty">No matching actions or notes</div>
           {/if}
         {:else}
           <div class="palette-section-label">RENAME NOTE</div>
@@ -294,7 +348,7 @@
   .palette-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(10, 10, 15, 0.7);
+    background: var(--overlay-strong);
     backdrop-filter: blur(4px);
     z-index: 100;
     display: flex;
@@ -304,11 +358,11 @@
   }
 
   .palette {
-    width: 560px;
-    max-height: 400px;
+    width: min(560px, calc(100vw - 20px));
+    max-height: min(440px, calc(100vh - 96px));
     background: var(--bg-surface);
     border: var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -342,8 +396,8 @@
     color: var(--accent);
     letter-spacing: 0.1em;
     padding: 2px 6px;
-    border: 1px solid rgba(0, 255, 204, 0.3);
-    border-radius: 4px;
+    border: var(--border-accent);
+    border-radius: var(--radius-xs);
   }
 
   .palette-results {
@@ -372,11 +426,17 @@
     cursor: pointer;
     gap: 8px;
     font-size: 13px;
+    width: 100%;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
   }
 
   .palette-item:hover,
   .palette-item.focused {
-    background: rgba(0, 255, 204, 0.08);
+    background: var(--accent-subtle);
     color: var(--accent);
   }
 
@@ -389,6 +449,6 @@
   .palette-item .shortcut {
     font-size: 11px;
     color: var(--text-dim);
+    flex-shrink: 0;
   }
 </style>
-

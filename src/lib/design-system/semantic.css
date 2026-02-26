@@ -1,0 +1,27 @@
+:root {
+  --bg-base: var(--color-black-900);
+  --bg-surface: var(--color-surface-800);
+  --bg-gradient-accent: #152327;
+  --surface-elevated: rgba(18, 18, 26, 0.94);
+  --surface-muted: rgba(26, 26, 36, 0.72);
+  --surface-frosted: rgba(18, 18, 26, 0.85);
+  --note-list-gradient-start: rgba(18, 18, 26, 0.95);
+  --note-list-gradient-end: rgba(10, 10, 15, 0.95);
+  --editor-bg: rgba(10, 10, 15, 0.7);
+
+  --accent: var(--color-cyan-400);
+  --accent-muted: var(--color-cyan-500);
+  --accent-subtle: rgba(0, 255, 204, var(--alpha-accent-soft));
+
+  --text: var(--color-gray-100);
+  --text-dim: var(--color-gray-500);
+  --danger: var(--color-red-500);
+  --danger-subtle: rgba(255, 69, 96, 0.12);
+  --danger-border: 1px solid rgba(255, 69, 96, 0.4);
+
+  --border: 1px solid rgba(0, 255, 204, var(--alpha-border-soft));
+  --border-accent: 1px solid rgba(0, 255, 204, 0.3);
+
+  --overlay-strong: rgba(10, 10, 15, var(--alpha-overlay-strong));
+  --overlay-medium: rgba(10, 10, 15, 0.45);
+}
