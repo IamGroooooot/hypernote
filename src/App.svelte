@@ -80,6 +80,7 @@
   const SHARE_TARGET_LOADING = 'Resolving local share target...';
   const UNDO_SHORTCUT_LABEL = formatModShortcut('Z');
   const RUNTIME_ROLE_LABEL = isTauriEnv() ? 'host (tauri)' : 'guest (web)';
+  const FALLBACK_SENDER_ID = `session-${Math.random().toString(36).slice(2, 10)}`;
 
   type JoinWorkspaceStatus = 'idle' | 'joining' | 'joined' | 'error';
   type ShareTargetStatus = 'idle' | 'copied' | 'error';
@@ -188,9 +189,13 @@
   onMount(() => {
     void bootstrap();
 
-    void getLocalPeerId().then((id) => {
-      myPeerId = id;
-    });
+    void getLocalPeerId()
+      .then((id) => {
+        myPeerId = id;
+      })
+      .catch((error) => {
+        console.error('[hypernote] failed to resolve local peer id', error);
+      });
 
     const mediaQuery = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`);
     const handleMediaChange = (event: MediaQueryListEvent) => {
@@ -470,8 +475,12 @@
     }
   }
 
+  function localSenderId(): string {
+    return myPeerId || FALLBACK_SENDER_ID;
+  }
+
   function schedulePresenceBroadcast(): void {
-    if (!myPeerId || !selectedId) {
+    if (!selectedId) {
       return;
     }
 
@@ -530,16 +539,16 @@
   }
 
   async function sendPresenceToPeer(peerId: string): Promise<void> {
-    if (!selectedId || !myPeerId || !isPeerApproved(peerId)) {
+    if (!selectedId || !isPeerApproved(peerId)) {
       return;
     }
 
-    const frame = createPresenceFrame(selectedId, myPeerId, createLocalPresencePayload());
+    const frame = createPresenceFrame(selectedId, localSenderId(), createLocalPresencePayload());
     await sendToPeer(peerId, serializeFrame(frame));
   }
 
   async function broadcastPresenceToApprovedPeers(): Promise<void> {
-    if (!selectedId || !myPeerId) {
+    if (!selectedId) {
       return;
     }
 
@@ -550,7 +559,7 @@
       return;
     }
 
-    const frame = createPresenceFrame(selectedId, myPeerId, createLocalPresencePayload());
+    const frame = createPresenceFrame(selectedId, localSenderId(), createLocalPresencePayload());
     const payload = serializeFrame(frame);
     await Promise.all(approvedPeers.map((peer) => sendToPeer(peer.peerId, payload)));
   }
@@ -804,7 +813,7 @@
   }
 
   async function announceOpenNotes(noteId: string): Promise<void> {
-    if (!myPeerId || !noteId) {
+    if (!noteId) {
       return;
     }
 
@@ -815,7 +824,7 @@
       return;
     }
 
-    const helloFrame = createHelloFrame('', myPeerId, [noteId]);
+    const helloFrame = createHelloFrame('', localSenderId(), [noteId]);
     const payload = serializeFrame(helloFrame);
     await Promise.all(connectedPeers.map((peer) => sendToPeer(peer.peerId, payload)));
   }
@@ -853,14 +862,12 @@
 
     sync = peerStore.syncStatus(selectedId);
 
-    if (myPeerId) {
-      const frame = createUpdateFrame(selectedId, myPeerId, update);
-      const payload = serializeFrame(frame);
-      const approvedPeers = peers.filter(
-        (peer) => peer.status === 'CONNECTED' && isPeerApproved(peer.peerId),
-      );
-      await Promise.all(approvedPeers.map((peer) => sendToPeer(peer.peerId, payload)));
-    }
+    const frame = createUpdateFrame(selectedId, localSenderId(), update);
+    const payload = serializeFrame(frame);
+    const approvedPeers = peers.filter(
+      (peer) => peer.status === 'CONNECTED' && isPeerApproved(peer.peerId),
+    );
+    await Promise.all(approvedPeers.map((peer) => sendToPeer(peer.peerId, payload)));
 
     schedulePresenceBroadcast();
   }
@@ -946,15 +953,15 @@
   }
 
   async function sendInitialSyncToPeer(peerId: string): Promise<void> {
-    if (!selectedId || !bridge || !myPeerId) {
+    if (!selectedId || !bridge) {
       return;
     }
 
-    const helloFrame = createHelloFrame('', myPeerId, [selectedId]);
+    const helloFrame = createHelloFrame('', localSenderId(), [selectedId]);
     await sendToPeer(peerId, serializeFrame(helloFrame));
 
     const fullState = bridge.encodeStateAsUpdate();
-    const updateFrame = createUpdateFrame(selectedId, myPeerId, fullState);
+    const updateFrame = createUpdateFrame(selectedId, localSenderId(), fullState);
     await sendToPeer(peerId, serializeFrame(updateFrame));
     await sendPresenceToPeer(peerId);
   }
@@ -1029,9 +1036,9 @@
       peerStore.setPeerNoteIds(event.peerId, payload.openNoteIds);
       sync = peerStore.syncStatus(selectedId);
 
-      if (bridge && myPeerId && payload.openNoteIds.includes(selectedId) && isPeerApproved(event.peerId)) {
+      if (bridge && payload.openNoteIds.includes(selectedId) && isPeerApproved(event.peerId)) {
         const fullState = bridge.encodeStateAsUpdate();
-        const updateFrame = createUpdateFrame(selectedId, myPeerId, fullState);
+        const updateFrame = createUpdateFrame(selectedId, localSenderId(), fullState);
         await sendToPeer(event.peerId, serializeFrame(updateFrame));
         await sendPresenceToPeer(event.peerId);
       }
@@ -1193,15 +1200,13 @@
     const nextState = transitionJoinPeerState(currentState, 'host_rejected');
     joinPeerStates[peerId] = nextState;
     pendingJoinRequests = pendingJoinRequests.filter((request) => request.peerId !== peerId);
-    if (myPeerId) {
-      const rejectionFrame = createErrorFrame(
-        '',
-        myPeerId,
-        'JOIN_REJECTED',
-        'Join request rejected by host.',
-      );
-      await sendToPeer(peerId, serializeFrame(rejectionFrame));
-    }
+    const rejectionFrame = createErrorFrame(
+      '',
+      localSenderId(),
+      'JOIN_REJECTED',
+      'Join request rejected by host.',
+    );
+    await sendToPeer(peerId, serializeFrame(rejectionFrame));
 
     await disconnectPeer(peerId, 'join request rejected by host');
     peerStore.removePeer(peerId);
