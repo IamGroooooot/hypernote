@@ -3,9 +3,16 @@
   export let value = '';
   export let crdtSizeWarning = false;
   export let showTitle = true;
+  export let textareaEl: HTMLTextAreaElement | null = null;
   export let onInput: (nextValue: string) => void = () => {};
+  export let onCursorChange: (nextOffset: number) => void = () => {};
   export let onTouchStart: (event: TouchEvent) => void = () => {};
   export let onTouchEnd: (event: TouchEvent) => void = () => {};
+
+  function reportCursorPosition(event: Event): void {
+    const target = event.currentTarget as HTMLTextAreaElement;
+    onCursorChange(target.selectionStart ?? 0);
+  }
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -19,11 +26,17 @@
   {/if}
 
   <textarea
+    bind:this={textareaEl}
     value={value}
     placeholder="Type fast. Persist in 500ms."
     on:input={(event) => {
-      onInput((event.currentTarget as HTMLTextAreaElement).value);
+      const target = event.currentTarget as HTMLTextAreaElement;
+      onInput(target.value);
+      onCursorChange(target.selectionStart ?? 0);
     }}
+    on:click={reportCursorPosition}
+    on:keyup={reportCursorPosition}
+    on:select={reportCursorPosition}
   ></textarea>
 </section>
 

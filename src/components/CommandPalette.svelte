@@ -22,6 +22,7 @@
   export let onRenameNote: (noteId: string, newTitle: string) => void = () => {};
   export let onRestoreNote: (noteId: string) => void = () => {};
   export let onOpenPeers: () => void = () => {};
+  export let onToggleToc: () => void = () => {};
   export let onShareWorkspace: () => void = () => {};
   export let onExportCurrent: () => void = () => {};
   export let onExportWorkspace: () => void = () => {};
@@ -187,6 +188,10 @@
     switch (actionId) {
       case 'new-note':
         onNewNote();
+        onClose();
+        break;
+      case 'toc':
+        onToggleToc();
         onClose();
         break;
       case 'rename':

@@ -1,5 +1,6 @@
 export type PaletteActionId =
   | 'new-note'
+  | 'toc'
   | 'rename'
   | 'delete'
   | 'restore-mode'
@@ -21,6 +22,12 @@ export const PALETTE_ACTIONS: readonly PaletteActionDescriptor[] = [
     label: '◈ new note',
     shortcut: '⌘/Ctrl+N',
     keywords: ['new', 'create', 'note'],
+  },
+  {
+    id: 'toc',
+    label: '☰ table of contents',
+    shortcut: '⌘/Ctrl+Shift+T',
+    keywords: ['toc', 'heading', 'outline', 'navigate'],
   },
   {
     id: 'rename',
@@ -123,6 +130,8 @@ export function matchesShortcut(event: KeyboardEvent, actionId: PaletteActionId)
   switch (actionId) {
     case 'new-note':
       return mod && !event.shiftKey && key === 'n';
+    case 'toc':
+      return mod && event.shiftKey && key === 't';
     case 'rename':
       return !mod && !event.shiftKey && event.key === 'F2';
     case 'delete':

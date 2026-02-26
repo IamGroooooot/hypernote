@@ -2,8 +2,10 @@
   import { onMount } from 'svelte';
 
   import CommandPalette from './components/CommandPalette.svelte';
+  import DesktopTocPanel from './components/DesktopTocPanel.svelte';
   import EditorPanel from './components/EditorPanel.svelte';
   import MobileActionSheet from './components/MobileActionSheet.svelte';
+  import MobileTocSheet from './components/MobileTocSheet.svelte';
   import NoteSidebar from './components/NoteSidebar.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import TopBar from './components/TopBar.svelte';
@@ -15,6 +17,7 @@
     type TextareaYjsBridge,
   } from './lib/editor/textarea-yjs-bridge';
   import { exportCurrentNote, exportWorkspaceZip, type ExportNoteInput } from './lib/export/workspace-export';
+  import { findActiveHeadingId, parseMarkdownToc } from './lib/editor/markdown-toc';
   import { BrowserNoteContainerStore } from './lib/persistence/browser-note-store';
   import { LocalNotePersistence } from './lib/persistence/local-note-persistence';
   import { isTauriEnv, TauriNoteContainerStore } from './lib/persistence/tauri-note-store';
@@ -47,8 +50,11 @@
 
   const CRDT_WARN_BYTES = 100 * 1024 * 1024;
   const MOBILE_BREAKPOINT = 800;
-  const EDGE_TRIGGER_PX = 16;
+  const RIGHT_EDGE_TRIGGER_PX = 16;
+  const LEFT_SWIPE_ZONE_PX = 72;
   const EDGE_SWIPE_MIN_PX = 48;
+  const MAX_SWIPE_VERTICAL_DRIFT_PX = 56;
+  const SWIPE_VECTOR_VISIBLE_MS = 420;
   const GESTURE_COACHMARK_KEY = 'hypernote:gesture-coachmark-count';
 
   let notes: NoteMeta[] = [];
@@ -78,8 +84,6 @@
   let showMobileTabs = false;
   let mobileActionSheetOpen = false;
   let showGestureCoachmark = false;
-  let edgeGestureStartX: number | null = null;
-  let edgeGestureStartY: number | null = null;
   let coachmarkTimer: number | null = null;
 
   let focusMode = false;
@@ -87,7 +91,27 @@
 
   let undoToast: { noteId: string; title: string; timeoutId: number } | null = null;
 
+  let editorTextareaEl: HTMLTextAreaElement | null = null;
+  let cursorOffset = 0;
+  let desktopTocOpen = false;
+  let mobileTocOpen = false;
+  let leftSwipeStartX: number | null = null;
+  let leftSwipeStartY: number | null = null;
+  let rightSwipeStartX: number | null = null;
+  let rightSwipeStartY: number | null = null;
+  let swipeVector:
+    | {
+        x: number;
+        y: number;
+        length: number;
+        direction: 'toc' | 'utility';
+      }
+    | null = null;
+  let swipeVectorTimer: number | null = null;
+
   $: showMobileTabs = isMobileViewport && mobileTab === 'notes';
+  $: tocHeadings = parseMarkdownToc(editorText);
+  $: activeTocHeadingId = findActiveHeadingId(tocHeadings, cursorOffset);
 
   onMount(() => {
     void bootstrap();
@@ -169,6 +193,7 @@
       window.clearInterval(refreshInterval);
       clearFocusModeTimer();
       clearCoachmarkTimer();
+      clearSwipeVectorTimer();
       clearUndoToast();
       releaseBridge();
     };
@@ -190,6 +215,12 @@
     if (matchesShortcut(event, 'new-note')) {
       event.preventDefault();
       await createNote();
+      return;
+    }
+
+    if (matchesShortcut(event, 'toc')) {
+      event.preventDefault();
+      toggleToc();
       return;
     }
 
@@ -256,6 +287,7 @@
     if (!isMobileViewport) {
       mobileTab = 'editor';
       mobileActionSheetOpen = false;
+      mobileTocOpen = false;
       showGestureCoachmark = false;
       return;
     }
@@ -276,6 +308,7 @@
       maybeShowGestureCoachmark();
     } else {
       showGestureCoachmark = false;
+      mobileTocOpen = false;
     }
   }
 
@@ -320,11 +353,20 @@
     }
   }
 
+  function clearSwipeVectorTimer(): void {
+    if (swipeVectorTimer !== null) {
+      window.clearTimeout(swipeVectorTimer);
+      swipeVectorTimer = null;
+    }
+  }
+
   async function openPalette(mode: 'none' | 'restore' | 'rename' = 'none'): Promise<void> {
     trashNotes = await persistence.listTrashMetadata();
     paletteMode = mode;
     paletteModeNonce += 1;
     paletteOpen = true;
+    desktopTocOpen = false;
+    mobileTocOpen = false;
     mobileActionSheetOpen = false;
   }
 
@@ -388,6 +430,7 @@
     });
 
     editorText = bridge.getText();
+    cursorOffset = 0;
     sync = peerStore.syncStatus(noteId);
 
     if (isMobileViewport) {
@@ -655,12 +698,33 @@
   function toggleUtilityHub(): void {
     utilityHubOpen = !utilityHubOpen;
     if (utilityHubOpen) {
+      desktopTocOpen = false;
       mobileActionSheetOpen = false;
+      mobileTocOpen = false;
+    }
+  }
+
+  function toggleToc(): void {
+    if (isMobileViewport) {
+      mobileTocOpen = !mobileTocOpen;
+      if (mobileTocOpen) {
+        mobileActionSheetOpen = false;
+        utilityHubOpen = false;
+        showGestureCoachmark = false;
+      }
+      return;
+    }
+
+    desktopTocOpen = !desktopTocOpen;
+    if (desktopTocOpen) {
+      utilityHubOpen = false;
     }
   }
 
   function handleShareWorkspace(): void {
     utilityHubOpen = true;
+    desktopTocOpen = false;
+    mobileTocOpen = false;
     if (shareInviteCode.length === 0) {
       shareInviteCode = generateInviteCode();
     }
@@ -712,6 +776,7 @@
 
   function onOpenNotesFromActionSheet(): void {
     mobileActionSheetOpen = false;
+    mobileTocOpen = false;
     setMobileTab('notes');
   }
 
@@ -726,6 +791,9 @@
 
   function runAction(actionId: PaletteActionId): void {
     switch (actionId) {
+      case 'toc':
+        toggleToc();
+        break;
       case 'share-workspace':
         handleShareWorkspace();
         break;
@@ -743,51 +811,125 @@
     }
   }
 
+  function jumpToHeading(offset: number): void {
+    const textarea = editorTextareaEl;
+    if (!textarea) {
+      return;
+    }
+
+    desktopTocOpen = false;
+    mobileTocOpen = false;
+    textarea.focus();
+    textarea.setSelectionRange(offset, offset);
+    cursorOffset = offset;
+
+    requestAnimationFrame(() => {
+      const textBefore = textarea.value.slice(0, offset);
+      const lineIndex = Math.max(0, textBefore.split('\n').length - 1);
+      const lineHeightRaw = window.getComputedStyle(textarea).lineHeight;
+      const lineHeight = Number.parseFloat(lineHeightRaw);
+
+      if (!Number.isFinite(lineHeight) || lineHeight <= 0) {
+        return;
+      }
+
+      textarea.scrollTop = Math.max(0, lineIndex * lineHeight - textarea.clientHeight * 0.35);
+    });
+  }
+
+  function showSwipeVectorFeedback(
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    direction: 'toc' | 'utility',
+  ): void {
+    clearSwipeVectorTimer();
+
+    swipeVector = {
+      x: Math.min(startX, endX),
+      y: Math.min(startY, endY),
+      length: Math.max(40, Math.abs(endX - startX)),
+      direction,
+    };
+
+    swipeVectorTimer = window.setTimeout(() => {
+      swipeVector = null;
+      swipeVectorTimer = null;
+    }, SWIPE_VECTOR_VISIBLE_MS);
+  }
+
+  function resetSwipeGestureStart(): void {
+    leftSwipeStartX = null;
+    leftSwipeStartY = null;
+    rightSwipeStartX = null;
+    rightSwipeStartY = null;
+  }
+
   function handleEditorTouchStart(event: TouchEvent): void {
     if (!isMobileViewport || mobileTab !== 'editor') {
-      edgeGestureStartX = null;
-      edgeGestureStartY = null;
+      resetSwipeGestureStart();
       return;
     }
 
     const touch = event.touches[0];
     if (!touch) {
+      resetSwipeGestureStart();
       return;
     }
 
-    const edgeDistance = window.innerWidth - touch.clientX;
-    if (edgeDistance <= EDGE_TRIGGER_PX) {
-      edgeGestureStartX = touch.clientX;
-      edgeGestureStartY = touch.clientY;
-      return;
+    const rightEdgeDistance = window.innerWidth - touch.clientX;
+    if (rightEdgeDistance <= RIGHT_EDGE_TRIGGER_PX) {
+      rightSwipeStartX = touch.clientX;
+      rightSwipeStartY = touch.clientY;
+    } else {
+      rightSwipeStartX = null;
+      rightSwipeStartY = null;
     }
 
-    edgeGestureStartX = null;
-    edgeGestureStartY = null;
+    if (touch.clientX >= 14 && touch.clientX <= LEFT_SWIPE_ZONE_PX) {
+      leftSwipeStartX = touch.clientX;
+      leftSwipeStartY = touch.clientY;
+    } else {
+      leftSwipeStartX = null;
+      leftSwipeStartY = null;
+    }
   }
 
   function handleEditorTouchEnd(event: TouchEvent): void {
-    if (edgeGestureStartX === null || edgeGestureStartY === null) {
-      return;
-    }
-
     const touch = event.changedTouches[0];
     if (!touch) {
-      edgeGestureStartX = null;
-      edgeGestureStartY = null;
+      resetSwipeGestureStart();
       return;
     }
 
-    const deltaX = edgeGestureStartX - touch.clientX;
-    const deltaY = Math.abs(edgeGestureStartY - touch.clientY);
+    if (rightSwipeStartX !== null && rightSwipeStartY !== null) {
+      const deltaX = rightSwipeStartX - touch.clientX;
+      const deltaY = Math.abs(rightSwipeStartY - touch.clientY);
 
-    if (deltaX >= EDGE_SWIPE_MIN_PX && deltaY <= 48) {
-      mobileActionSheetOpen = true;
-      showGestureCoachmark = false;
+      if (deltaX >= EDGE_SWIPE_MIN_PX && deltaY <= MAX_SWIPE_VERTICAL_DRIFT_PX) {
+        mobileActionSheetOpen = true;
+        mobileTocOpen = false;
+        showGestureCoachmark = false;
+        showSwipeVectorFeedback(rightSwipeStartX, rightSwipeStartY, touch.clientX, touch.clientY, 'utility');
+        resetSwipeGestureStart();
+        return;
+      }
     }
 
-    edgeGestureStartX = null;
-    edgeGestureStartY = null;
+    if (leftSwipeStartX !== null && leftSwipeStartY !== null) {
+      const deltaX = touch.clientX - leftSwipeStartX;
+      const deltaY = Math.abs(leftSwipeStartY - touch.clientY);
+
+      if (deltaX >= EDGE_SWIPE_MIN_PX && deltaY <= MAX_SWIPE_VERTICAL_DRIFT_PX) {
+        mobileTocOpen = true;
+        mobileActionSheetOpen = false;
+        showGestureCoachmark = false;
+        showSwipeVectorFeedback(leftSwipeStartX, leftSwipeStartY, touch.clientX, touch.clientY, 'toc');
+      }
+    }
+
+    resetSwipeGestureStart();
   }
 </script>
 
@@ -797,9 +939,11 @@
       state={sync.state}
       peerCount={sync.peerCount}
       compactDock={focusMode && !utilityHubOpen}
+      tocOpen={desktopTocOpen}
       onOpenPalette={() => {
         void openPalette();
       }}
+      onToggleToc={toggleToc}
       onToggleUtilityHub={toggleUtilityHub}
     />
   {/if}
@@ -827,9 +971,13 @@
         title={notes.find((note) => note.id === selectedId)?.title ?? 'Untitled'}
         value={editorText}
         crdtSizeWarning={crdtSizeWarning}
+        bind:textareaEl={editorTextareaEl}
         showTitle={!isMobileViewport}
         onTouchStart={handleEditorTouchStart}
         onTouchEnd={handleEditorTouchEnd}
+        onCursorChange={(nextOffset) => {
+          cursorOffset = nextOffset;
+        }}
         onInput={(nextValue) => {
           void handleEditorInput(nextValue);
         }}
@@ -843,7 +991,18 @@
 
   {#if showGestureCoachmark && isMobileViewport && mobileTab === 'editor'}
     <div class="gesture-coachmark" aria-live="polite">
-      Swipe left from the right edge to open share/export actions.
+      Swipe right from the left side for ToC, or left from the right edge for actions.
+    </div>
+  {/if}
+
+  {#if swipeVector}
+    <div
+      class={`swipe-vector ${swipeVector.direction}`}
+      style={`--vector-x:${swipeVector.x}px; --vector-y:${swipeVector.y}px; --vector-length:${swipeVector.length}px;`}
+      aria-hidden="true"
+    >
+      <span class="vector-trail"></span>
+      <span class="vector-label">{swipeVector.direction === 'toc' ? 'toc' : 'actions'}</span>
     </div>
   {/if}
 
@@ -905,6 +1064,9 @@
   onOpenPeers={() => {
     runAction('peers');
   }}
+  onToggleToc={() => {
+    runAction('toc');
+  }}
   onShareWorkspace={() => {
     runAction('share-workspace');
   }}
@@ -922,6 +1084,10 @@
     mobileActionSheetOpen = false;
   }}
   onOpenNotes={onOpenNotesFromActionSheet}
+  onOpenToc={() => {
+    mobileActionSheetOpen = false;
+    mobileTocOpen = true;
+  }}
   onShareWorkspace={() => {
     mobileActionSheetOpen = false;
     handleShareWorkspace();
@@ -935,6 +1101,26 @@
     void handleExportWorkspace();
   }}
   onShowGestureHelp={handleShowGestureHelp}
+/>
+
+<DesktopTocPanel
+  open={desktopTocOpen && !isMobileViewport}
+  headings={tocHeadings}
+  activeHeadingId={activeTocHeadingId}
+  onClose={() => {
+    desktopTocOpen = false;
+  }}
+  onSelectHeading={jumpToHeading}
+/>
+
+<MobileTocSheet
+  open={mobileTocOpen && isMobileViewport && mobileTab === 'editor'}
+  headings={tocHeadings}
+  activeHeadingId={activeTocHeadingId}
+  onClose={() => {
+    mobileTocOpen = false;
+  }}
+  onSelectHeading={jumpToHeading}
 />
 
 <style>
@@ -964,7 +1150,7 @@
 
   .content.editor-only {
     grid-template-columns: 1fr;
-    height: 100vh;
+    height: 100dvh;
   }
 
   .mobile-editor-fullbleed {
@@ -976,7 +1162,8 @@
   }
 
   .mobile-editor-fullbleed :global(.editor-panel textarea) {
-    min-height: 100vh;
+    min-height: 100%;
+    height: 100%;
     border: none;
     border-radius: 0;
   }
@@ -994,6 +1181,47 @@
     color: var(--text);
     z-index: 150;
     box-shadow: var(--shadow-elevated);
+  }
+
+  .swipe-vector {
+    position: fixed;
+    left: var(--vector-x);
+    top: calc(var(--vector-y) - 16px);
+    width: var(--vector-length);
+    height: 32px;
+    pointer-events: none;
+    z-index: 155;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    animation: swipe-fade 420ms ease-out forwards;
+  }
+
+  .swipe-vector.utility {
+    justify-content: flex-end;
+  }
+
+  .vector-trail {
+    flex: 1;
+    height: 2px;
+    border-radius: var(--radius-round);
+    background: linear-gradient(90deg, var(--accent-muted), transparent);
+    opacity: 0.8;
+  }
+
+  .swipe-vector.utility .vector-trail {
+    background: linear-gradient(90deg, transparent, var(--accent-muted));
+  }
+
+  .vector-label {
+    font-size: 10px;
+    border: var(--border);
+    border-radius: var(--radius-round);
+    padding: 1px 6px;
+    color: var(--accent);
+    background: var(--surface-elevated);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
   }
 
   .undo-toast {
@@ -1029,6 +1257,20 @@
     .content.mobile {
       grid-template-columns: 1fr;
       grid-template-rows: auto 1fr;
+    }
+  }
+
+  @keyframes swipe-fade {
+    0% {
+      opacity: 0;
+    }
+
+    15% {
+      opacity: 1;
+    }
+
+    100% {
+      opacity: 0;
     }
   }
 </style>

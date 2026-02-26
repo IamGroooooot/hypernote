@@ -21,6 +21,13 @@ export interface ExportManifest {
   files: ExportFileManifestEntry[];
 }
 
+export type MarkdownBlock =
+  | { type: 'heading'; level: number; text: string }
+  | { type: 'paragraph'; text: string }
+  | { type: 'list-item'; ordered: boolean; index: number; text: string }
+  | { type: 'blockquote'; text: string }
+  | { type: 'code'; text: string };
+
 export async function exportCurrentNote(note: ExportNoteInput): Promise<void> {
   const markdown = buildMarkdown(note);
   const pdfBytes = buildPdf(note);
@@ -84,6 +91,8 @@ function buildMarkdown(note: ExportNoteInput): string {
 }
 
 function buildPdf(note: ExportNoteInput): Uint8Array {
+  const markdown = buildMarkdown(note);
+  const blocks = parseMarkdownBlocks(markdown);
   const document = new jsPDF({
     format: 'a4',
     unit: 'pt',
@@ -92,32 +101,220 @@ function buildPdf(note: ExportNoteInput): Uint8Array {
   const left = 48;
   const right = 48;
   const maxWidth = document.internal.pageSize.getWidth() - left - right;
-  const lineHeight = 18;
-  const title = note.meta.title.length > 0 ? note.meta.title : 'Untitled';
-
-  document.setFont('helvetica', 'bold');
-  document.setFontSize(16);
-  document.text(title, left, 56);
-
-  document.setFont('helvetica', 'normal');
-  document.setFontSize(11);
-
-  const lines = document.splitTextToSize(note.text, maxWidth) as string[];
-  let cursorY = 84;
   const pageBottom = document.internal.pageSize.getHeight() - 48;
+  let cursorY = 56;
 
-  for (const line of lines) {
-    if (cursorY > pageBottom) {
-      document.addPage();
-      cursorY = 56;
+  const addPageIfNeeded = (nextLineHeight: number) => {
+    if (cursorY + nextLineHeight <= pageBottom) {
+      return;
     }
+    document.addPage();
+    cursorY = 56;
+  };
 
-    document.text(line, left, cursorY);
-    cursorY += lineHeight;
+  const drawWrappedText = (
+    text: string,
+    options: {
+      font: 'helvetica' | 'courier';
+      style: 'normal' | 'bold' | 'italic';
+      size: number;
+      indent?: number;
+      spacingAfter?: number;
+    },
+  ) => {
+    const indent = options.indent ?? 0;
+    const spacingAfter = options.spacingAfter ?? 8;
+    const lineHeight = options.size * 1.45;
+    const width = Math.max(20, maxWidth - indent);
+
+    document.setFont(options.font, options.style);
+    document.setFontSize(options.size);
+
+    const lines = document.splitTextToSize(text, width) as string[];
+    for (const line of lines) {
+      addPageIfNeeded(lineHeight);
+      document.text(line, left + indent, cursorY);
+      cursorY += lineHeight;
+    }
+    cursorY += spacingAfter;
+  };
+
+  for (const block of blocks) {
+    switch (block.type) {
+      case 'heading':
+        drawWrappedText(block.text, {
+          font: 'helvetica',
+          style: 'bold',
+          size: headingSize(block.level),
+          spacingAfter: 6,
+        });
+        break;
+      case 'paragraph':
+        drawWrappedText(block.text, {
+          font: 'helvetica',
+          style: 'normal',
+          size: 11,
+        });
+        break;
+      case 'list-item': {
+        const bullet = block.ordered ? `${block.index}.` : '•';
+        drawWrappedText(`${bullet} ${block.text}`, {
+          font: 'helvetica',
+          style: 'normal',
+          size: 11,
+          indent: 12,
+          spacingAfter: 4,
+        });
+        break;
+      }
+      case 'blockquote':
+        drawWrappedText(`> ${block.text}`, {
+          font: 'helvetica',
+          style: 'italic',
+          size: 11,
+          indent: 10,
+        });
+        break;
+      case 'code':
+        drawWrappedText(block.text, {
+          font: 'courier',
+          style: 'normal',
+          size: 10,
+          indent: 10,
+          spacingAfter: 6,
+        });
+        break;
+      default:
+        break;
+    }
   }
 
   const buffer = document.output('arraybuffer');
   return new Uint8Array(buffer);
+}
+
+export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
+  const blocks: MarkdownBlock[] = [];
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  const paragraphBuffer: string[] = [];
+
+  let inFence = false;
+  let codeLines: string[] = [];
+
+  const flushParagraph = () => {
+    if (paragraphBuffer.length === 0) {
+      return;
+    }
+
+    const text = paragraphBuffer.join(' ').trim();
+    if (text.length > 0) {
+      blocks.push({ type: 'paragraph', text });
+    }
+    paragraphBuffer.length = 0;
+  };
+
+  const flushCode = () => {
+    if (codeLines.length === 0) {
+      return;
+    }
+    blocks.push({
+      type: 'code',
+      text: codeLines.join('\n'),
+    });
+    codeLines = [];
+  };
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+
+    if (/^\s{0,3}(```|~~~)/u.test(rawLine)) {
+      flushParagraph();
+      if (inFence) {
+        flushCode();
+      }
+      inFence = !inFence;
+      continue;
+    }
+
+    if (inFence) {
+      codeLines.push(rawLine);
+      continue;
+    }
+
+    if (trimmed.length === 0) {
+      flushParagraph();
+      continue;
+    }
+
+    const headingMatch = rawLine.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/u);
+    if (headingMatch) {
+      flushParagraph();
+      blocks.push({
+        type: 'heading',
+        level: headingMatch[1].length,
+        text: headingMatch[2].trim(),
+      });
+      continue;
+    }
+
+    const orderedListMatch = rawLine.match(/^\s*(\d+)\.\s+(.+)$/u);
+    if (orderedListMatch) {
+      flushParagraph();
+      blocks.push({
+        type: 'list-item',
+        ordered: true,
+        index: Number.parseInt(orderedListMatch[1], 10),
+        text: orderedListMatch[2].trim(),
+      });
+      continue;
+    }
+
+    const unorderedListMatch = rawLine.match(/^\s*[-*+]\s+(.+)$/u);
+    if (unorderedListMatch) {
+      flushParagraph();
+      blocks.push({
+        type: 'list-item',
+        ordered: false,
+        index: 0,
+        text: unorderedListMatch[1].trim(),
+      });
+      continue;
+    }
+
+    const quoteMatch = rawLine.match(/^\s*>\s?(.+)$/u);
+    if (quoteMatch) {
+      flushParagraph();
+      blocks.push({
+        type: 'blockquote',
+        text: quoteMatch[1].trim(),
+      });
+      continue;
+    }
+
+    paragraphBuffer.push(trimmed);
+  }
+
+  flushParagraph();
+  if (inFence) {
+    flushCode();
+  }
+
+  return blocks;
+}
+
+function headingSize(level: number): number {
+  switch (level) {
+    case 1:
+      return 18;
+    case 2:
+      return 15;
+    case 3:
+      return 13;
+    case 4:
+      return 12;
+    default:
+      return 11;
+  }
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {

@@ -2,6 +2,7 @@
   export let open = false;
   export let onClose: () => void = () => {};
   export let onOpenNotes: () => void = () => {};
+  export let onOpenToc: () => void = () => {};
   export let onShareWorkspace: () => void = () => {};
   export let onExportCurrent: () => void = () => {};
   export let onExportWorkspace: () => void = () => {};
@@ -25,6 +26,7 @@
       </header>
 
       <button type="button" on:click={onOpenNotes}>open notes</button>
+      <button type="button" on:click={onOpenToc}>open table of contents</button>
       <button type="button" on:click={onShareWorkspace}>share workspace</button>
       <button type="button" on:click={onExportCurrent}>export current note</button>
       <button type="button" on:click={onExportWorkspace}>export workspace</button>

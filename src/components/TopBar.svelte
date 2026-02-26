@@ -4,7 +4,9 @@
   export let state: SyncStatus['state'] = 'offline';
   export let peerCount = 0;
   export let compactDock = false;
+  export let tocOpen = false;
   export let onOpenPalette: () => void = () => {};
+  export let onToggleToc: () => void = () => {};
   export let onToggleUtilityHub: () => void = () => {};
 
   $: dotClass =
@@ -21,6 +23,15 @@
     {#if !compactDock}
       <span class="peer-count">{peerCount} peers</span>
     {/if}
+    <button
+      type="button"
+      class="dock-toc"
+      class:active={tocOpen}
+      aria-label="toggle table of contents"
+      on:click={onToggleToc}
+    >
+      toc
+    </button>
     <button type="button" class="dock-trigger" aria-label="open utility hub" on:click={onToggleUtilityHub}>⋯</button>
   </div>
 </header>
