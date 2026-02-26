@@ -73,6 +73,7 @@
   const SWIPE_VECTOR_VISIBLE_MS = 420;
   const GESTURE_COACHMARK_KEY = 'hypernote:gesture-coachmark-count';
   const PRESENCE_THROTTLE_MS = 120;
+  const PRESENCE_HEARTBEAT_MS = 2_000;
   const PRESENCE_STALE_MS = 20_000;
   const JOIN_INPUT_HINT = 'Enter host, host:port, or ws://host:port';
   const SHARE_TARGET_HINT = 'Share this target with a collaborator on the same LAN';
@@ -95,6 +96,7 @@
   type RemotePresence = PresencePayload & {
     peerId: string;
     noteId: string;
+    receivedAt: number;
   };
   type PresenceIndicator = {
     peerId: string;
@@ -168,6 +170,7 @@
     | null = null;
   let swipeVectorTimer: number | null = null;
   let presenceBroadcastTimer: number | null = null;
+  let presenceHeartbeatInterval: number | null = null;
   let localScrollMetrics: ScrollMetrics = {
     scrollTop: 0,
     scrollHeight: 1,
@@ -251,6 +254,9 @@
       pruneStalePresence();
       void refreshPeers();
     }, 5_000);
+    presenceHeartbeatInterval = window.setInterval(() => {
+      void broadcastPresenceToApprovedPeers();
+    }, PRESENCE_HEARTBEAT_MS);
 
     return () => {
       stopMediaQuerySubscription();
@@ -264,6 +270,10 @@
       stopPeerDisconnected();
       stopWsMessage();
       window.clearInterval(refreshInterval);
+      if (presenceHeartbeatInterval !== null) {
+        window.clearInterval(presenceHeartbeatInterval);
+        presenceHeartbeatInterval = null;
+      }
       clearFocusModeTimer();
       clearCoachmarkTimer();
       clearSwipeVectorTimer();
@@ -550,6 +560,7 @@
       [peerId]: {
         peerId,
         noteId,
+        receivedAt: Date.now(),
         ...payload,
       },
     };
@@ -571,7 +582,7 @@
     let changed = false;
 
     for (const [peerId, presence] of Object.entries(remotePresenceByPeer)) {
-      if (presence.emittedAt < cutoff) {
+      if (presence.receivedAt < cutoff) {
         changed = true;
         continue;
       }

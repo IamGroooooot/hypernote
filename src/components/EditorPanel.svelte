@@ -1,4 +1,6 @@
 <script lang="ts">
+  let pointerSelecting = false;
+
   type PresenceIndicator = {
     peerId: string;
     label: string;
@@ -33,6 +35,23 @@
       clientHeight: target.clientHeight,
     });
   }
+
+  function handlePointerDown(): void {
+    pointerSelecting = true;
+  }
+
+  function handlePointerMove(event: MouseEvent): void {
+    if (!pointerSelecting || event.buttons !== 1) {
+      return;
+    }
+
+    reportCursorPosition(event);
+  }
+
+  function handlePointerUp(event: Event): void {
+    pointerSelecting = false;
+    reportCursorPosition(event);
+  }
 </script>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -59,6 +78,10 @@
       on:keyup={reportCursorPosition}
       on:select={reportCursorPosition}
       on:scroll={reportScrollMetrics}
+      on:mousedown={handlePointerDown}
+      on:mousemove={handlePointerMove}
+      on:mouseup={handlePointerUp}
+      on:mouseleave={handlePointerUp}
     ></textarea>
 
     {#if remotePresence.length > 0}
