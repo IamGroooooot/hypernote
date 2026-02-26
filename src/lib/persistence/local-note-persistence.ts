@@ -1,4 +1,9 @@
-import { decodeNoteContainer, decodeNoteMetadata, encodeNoteContainer, type NoteMeta } from '../contracts';
+import {
+  decodeNoteContainer,
+  decodeNoteMetadata,
+  encodeNoteContainer,
+  type NoteMeta,
+} from '../contracts';
 import { createDebouncedSaveScheduler, type DebouncedSaveScheduler } from '../core';
 import { ContainerNoteMetadataIndex, type NoteMetadataIndex } from './metadata-index';
 import { StoreTrashMover, type TrashMover } from './trash-mover';

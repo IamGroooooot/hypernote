@@ -204,6 +204,12 @@ function createSnapshot(id: string, title: string, updatedAt: number): NoteSnaps
 }
 
 function createSnapshotWithDeletedAt(id: string, title: string, deletedAt: number): Uint8Array {
-  const meta: NoteMeta = { id, title, createdAt: deletedAt - 1000, updatedAt: deletedAt, deletedAt };
+  const meta: NoteMeta = {
+    id,
+    title,
+    createdAt: deletedAt - 1000,
+    updatedAt: deletedAt,
+    deletedAt,
+  };
   return encodeNoteContainer(meta, new Uint8Array([1, 2, 3])).bytes;
 }

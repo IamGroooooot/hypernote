@@ -72,9 +72,7 @@ export class BrowserNoteContainerStore implements NoteContainerStore {
       }
     }
 
-    return ids
-      .map((id) => this.readRaw(prefix, id))
-      .filter((v): v is Uint8Array => Boolean(v));
+    return ids.map((id) => this.readRaw(prefix, id)).filter((v): v is Uint8Array => Boolean(v));
   }
 
   private listNoteIds(): string[] {
