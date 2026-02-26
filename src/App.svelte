@@ -147,7 +147,7 @@
     | null = null;
   let swipeVectorTimer: number | null = null;
 
-  $: showMobileTabs = isMobileViewport && mobileTab === 'notes';
+  $: showMobileTabs = isMobileViewport;
   $: tocHeadings = parseMarkdownToc(editorText);
   $: activeTocHeadingId = findActiveHeadingId(tocHeadings, cursorOffset);
   $: connectedPeerCount = peers.filter((peer) => peer.status.toUpperCase() === 'CONNECTED').length;
@@ -165,7 +165,7 @@
     };
 
     applyViewportMode(mediaQuery.matches);
-    mediaQuery.addEventListener('change', handleMediaChange);
+    const stopMediaQuerySubscription = subscribeToMediaQuery(mediaQuery, handleMediaChange);
 
     const preventGestureZoom = (event: Event) => {
       if (isMobileViewport) {
@@ -222,7 +222,7 @@
     }, 5_000);
 
     return () => {
-      mediaQuery.removeEventListener('change', handleMediaChange);
+      stopMediaQuerySubscription();
       window.removeEventListener('gesturestart', preventGestureZoom as EventListener);
       window.removeEventListener('gesturechange', preventGestureZoom as EventListener);
       window.removeEventListener('gestureend', preventGestureZoom as EventListener);
@@ -242,13 +242,16 @@
   });
 
   async function handleGlobalKeydown(event: KeyboardEvent): Promise<void> {
-    if (undoToast && isModKey(event) && !event.shiftKey && event.key.toLowerCase() === 'z') {
+    const key = event.key.toLowerCase();
+    const code = (event.code ?? '').toLowerCase();
+
+    if (undoToast && isModKey(event) && !event.shiftKey && (key === 'z' || code === 'keyz')) {
       event.preventDefault();
       await undoDelete();
       return;
     }
 
-    if (isModKey(event) && !event.shiftKey && event.key.toLowerCase() === 'k') {
+    if (isModKey(event) && !event.shiftKey && (key === 'k' || code === 'keyk')) {
       event.preventDefault();
       await openPalette();
       return;
@@ -327,13 +330,13 @@
       return;
     }
 
-    if (isModKey(event) && !event.shiftKey && event.key === '1' && isMobileViewport) {
+    if (isModKey(event) && !event.shiftKey && (event.key === '1' || event.code === 'Digit1') && isMobileViewport) {
       event.preventDefault();
       setMobileTab('notes');
       return;
     }
 
-    if (isModKey(event) && !event.shiftKey && event.key === '2' && isMobileViewport) {
+    if (isModKey(event) && !event.shiftKey && (event.key === '2' || event.code === 'Digit2') && isMobileViewport) {
       event.preventDefault();
       setMobileTab('editor');
     }
@@ -417,6 +420,28 @@
     }
   }
 
+  function subscribeToMediaQuery(
+    mediaQuery: MediaQueryList,
+    handler: (event: MediaQueryListEvent) => void,
+  ): () => void {
+    const legacyMediaQuery = mediaQuery as MediaQueryList & {
+      addListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+      removeListener?: (listener: (event: MediaQueryListEvent) => void) => void;
+    };
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handler);
+      return () => mediaQuery.removeEventListener('change', handler);
+    }
+
+    if (typeof legacyMediaQuery.addListener === 'function') {
+      legacyMediaQuery.addListener(handler);
+      return () => legacyMediaQuery.removeListener?.(handler);
+    }
+
+    return () => {};
+  }
+
   async function openPalette(mode: 'none' | 'restore' | 'rename' = 'none'): Promise<void> {
     trashNotes = await persistence.listTrashMetadata();
     paletteMode = mode;
@@ -446,19 +471,45 @@
   }
 
   async function bootstrap(): Promise<void> {
-    void persistence.sweepTrash();
-    notes = sortNotes(await persistence.listMetadata());
-    await refreshTrashNotes();
+    void persistence.sweepTrash().catch((error: unknown) => {
+      console.error('[hypernote] failed to sweep trash', error);
+    });
+
+    try {
+      notes = sortNotes(await persistence.listMetadata());
+    } catch (error) {
+      console.error('[hypernote] failed to list notes', error);
+      notes = [];
+    }
+
+    try {
+      await refreshTrashNotes();
+    } catch (error) {
+      console.error('[hypernote] failed to load trash notes', error);
+      trashNotes = [];
+    }
 
     if (notes.length === 0) {
-      await createNote();
+      try {
+        await createNote();
+      } catch (error) {
+        console.error('[hypernote] failed to create initial note', error);
+      }
     }
 
     if (notes.length > 0) {
-      await selectNote(notes[0].id);
+      try {
+        await selectNote(notes[0].id);
+      } catch (error) {
+        console.error('[hypernote] failed to open initial note', error);
+      }
     }
 
-    await refreshPeers();
+    try {
+      await refreshPeers();
+    } catch (error) {
+      console.error('[hypernote] failed to refresh peers', error);
+    }
   }
 
   async function createNote(): Promise<void> {
@@ -1090,6 +1141,7 @@
 
   function toggleNotesPane(): void {
     if (isMobileViewport) {
+      setMobileTab(mobileTab === 'notes' ? 'editor' : 'notes');
       return;
     }
 

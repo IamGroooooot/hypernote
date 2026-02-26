@@ -31,4 +31,25 @@ describe('shortcut labels', () => {
     expect(matchesShortcut(modB, 'toggle-notes')).toBe(true);
     expect(matchesShortcut(modShiftB, 'toggle-notes')).toBe(false);
   });
+
+  it('matches shortcuts by keyboard code under non-latin input', () => {
+    const koreanInput = {
+      key: 'ㅠ',
+      code: 'KeyB',
+      metaKey: true,
+      ctrlKey: false,
+      shiftKey: false,
+    } as KeyboardEvent;
+
+    const koreanNew = {
+      key: 'ㅜ',
+      code: 'KeyN',
+      metaKey: true,
+      ctrlKey: false,
+      shiftKey: false,
+    } as KeyboardEvent;
+
+    expect(matchesShortcut(koreanInput, 'toggle-notes')).toBe(true);
+    expect(matchesShortcut(koreanNew, 'new-note')).toBe(true);
+  });
 });

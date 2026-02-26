@@ -146,33 +146,40 @@ export function isModKey(event: KeyboardEvent): boolean {
   return event.metaKey || event.ctrlKey;
 }
 
+function matchesLetter(event: KeyboardEvent, letter: string): boolean {
+  const key = event.key.toLowerCase();
+  const code = (event.code ?? '').toLowerCase();
+  return key === letter || code === `key${letter}`;
+}
+
 export function matchesShortcut(event: KeyboardEvent, actionId: PaletteActionId): boolean {
   const key = event.key.toLowerCase();
+  const code = (event.code ?? '').toLowerCase();
   const mod = isModKey(event);
 
   switch (actionId) {
     case 'new-note':
-      return mod && !event.shiftKey && key === 'n';
+      return mod && !event.shiftKey && matchesLetter(event, 'n');
     case 'toggle-notes':
-      return mod && !event.shiftKey && key === 'b';
+      return mod && !event.shiftKey && matchesLetter(event, 'b');
     case 'toc':
-      return mod && event.shiftKey && key === 't';
+      return mod && event.shiftKey && matchesLetter(event, 't');
     case 'rename':
-      return !mod && !event.shiftKey && event.key === 'F2';
+      return !mod && !event.shiftKey && (event.key === 'F2' || event.code === 'F2');
     case 'delete':
-      return mod && !event.shiftKey && key === 'backspace';
+      return mod && !event.shiftKey && (key === 'backspace' || code === 'backspace');
     case 'restore-mode':
-      return mod && event.shiftKey && key === 'backspace';
+      return mod && event.shiftKey && (key === 'backspace' || code === 'backspace');
     case 'peers':
-      return mod && event.shiftKey && key === 'p';
+      return mod && event.shiftKey && matchesLetter(event, 'p');
     case 'join-workspace':
-      return mod && event.shiftKey && key === 'j';
+      return mod && event.shiftKey && matchesLetter(event, 'j');
     case 'share-workspace':
-      return mod && event.shiftKey && key === 's';
+      return mod && event.shiftKey && matchesLetter(event, 's');
     case 'export-current':
-      return mod && !event.shiftKey && key === 'e';
+      return mod && !event.shiftKey && matchesLetter(event, 'e');
     case 'export-workspace':
-      return mod && event.shiftKey && key === 'e';
+      return mod && event.shiftKey && matchesLetter(event, 'e');
     default:
       return false;
   }
