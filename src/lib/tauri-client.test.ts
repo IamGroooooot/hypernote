@@ -2,15 +2,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   applyLocalEdit,
+  broadcastUpdate,
   getShareTarget,
   joinWorkspace,
   listPeers,
+  onPeerConnected,
+  onWsMessage,
+  sendToPeer,
   onPeerUpdate,
 } from './tauri-client';
 
 afterEach(() => {
   vi.restoreAllMocks();
   Reflect.deleteProperty(globalThis, 'window');
+  Reflect.deleteProperty(globalThis, 'WebSocket');
 });
 
 describe('tauri client', () => {
@@ -53,11 +58,54 @@ describe('tauri client', () => {
     expect(result).toBe('');
   });
 
-  it('returns safe fallback when tauri runtime is unavailable for join workspace', async () => {
+  it('joins workspace via browser websocket fallback when tauri runtime is unavailable', async () => {
+    installWindow();
+    const sockets = installMockWebSocket();
+
     const result = await joinWorkspace('127.0.0.1:4747');
 
-    expect(result.accepted).toBe(false);
-    expect(result.reason).toBe('tauri runtime unavailable');
+    expect(result).toEqual({ accepted: true, reason: null });
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0]?.url).toBe('ws://127.0.0.1:4747/');
+    sockets[0]?.close();
+  });
+
+  it('dispatches fallback peer/ws events and supports send/broadcast in browser mode', async () => {
+    installWindow();
+    const sockets = installMockWebSocket();
+
+    const onConnected = vi.fn();
+    const onMessage = vi.fn();
+    const stopConnected = onPeerConnected(onConnected);
+    const stopMessage = onWsMessage(onMessage);
+
+    await joinWorkspace('127.0.0.1:4747');
+    const socket = sockets[0];
+    expect(socket).toBeDefined();
+    socket!.open();
+    socket!.emitMessage('{"type":"hello"}');
+
+    expect(onConnected).toHaveBeenCalledTimes(1);
+    const connectedPeerId = onConnected.mock.calls[0]?.[0]?.peerId;
+    expect(typeof connectedPeerId).toBe('string');
+    expect(onMessage).toHaveBeenCalledWith({
+      peerId: connectedPeerId,
+      payload: '{"type":"hello"}',
+    });
+
+    const peers = await listPeers();
+    expect(peers).toHaveLength(1);
+    expect(peers[0]?.status).toBe('CONNECTED');
+
+    const sendResult = await sendToPeer(connectedPeerId, 'direct');
+    const broadcastResult = await broadcastUpdate('broadcast');
+    expect(sendResult).toBe(true);
+    expect(broadcastResult).toBe(true);
+    expect(socket?.sent).toEqual(['direct', 'broadcast']);
+    socket?.close();
+
+    stopConnected();
+    stopMessage();
   });
 
   it('normalizes peer statuses from invoke payload', async () => {
@@ -127,4 +175,64 @@ function installWindow(overrides: WindowOverrides = {}): Window {
   });
 
   return windowMock;
+}
+
+type MockWebSocketInstance = {
+  url: string;
+  sent: string[];
+  close: () => void;
+  open: () => void;
+  emitMessage: (data: string) => void;
+};
+
+function installMockWebSocket(): MockWebSocketInstance[] {
+  const sockets: MockWebSocket[] = [];
+
+  class MockWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+
+    public readyState = MockWebSocket.CONNECTING;
+    public onopen: ((event: Event) => void) | null = null;
+    public onclose: ((event: Event) => void) | null = null;
+    public onerror: ((event: Event) => void) | null = null;
+    public onmessage: ((event: { data: unknown }) => void) | null = null;
+    public sent: string[] = [];
+
+    constructor(public readonly url: string) {
+      sockets.push(this);
+    }
+
+    send(data: string): void {
+      if (this.readyState !== MockWebSocket.OPEN) {
+        throw new Error('socket is not open');
+      }
+
+      this.sent.push(data);
+    }
+
+    close(): void {
+      this.readyState = MockWebSocket.CLOSED;
+      this.onclose?.(new Event('close'));
+    }
+
+    open(): void {
+      this.readyState = MockWebSocket.OPEN;
+      this.onopen?.(new Event('open'));
+    }
+
+    emitMessage(data: string): void {
+      this.onmessage?.({ data });
+    }
+  }
+
+  Object.defineProperty(globalThis, 'WebSocket', {
+    value: MockWebSocket,
+    configurable: true,
+    writable: true,
+  });
+
+  return sockets;
 }

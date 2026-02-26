@@ -1,11 +1,34 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { listen as tauriListen, type Event as TauriEvent, type UnlistenFn } from '@tauri-apps/api/event';
+import {
+  listen as tauriListen,
+  type Event as TauriEvent,
+  type UnlistenFn,
+} from '@tauri-apps/api/event';
 
 import type { CommandAck, NoteDocument, NoteMeta, PeerInfo, PeerStatus } from './contracts';
+
+const FALLBACK_EVENT_PEER_CONNECTED = 'hypernote:peer-connected';
+const FALLBACK_EVENT_PEER_DISCONNECTED = 'hypernote:peer-disconnected';
+const FALLBACK_EVENT_WS_MESSAGE = 'hypernote:ws-message';
+
+const WS_READY_CONNECTING = 0;
+const WS_READY_OPEN = 1;
+const WS_READY_CLOSING = 2;
+const WS_READY_CLOSED = 3;
+
+const browserPeerConnections = new Map<string, BrowserPeerConnection>();
+const browserLocalPeerId = `web-${Math.random().toString(36).slice(2, 10)}`;
+let browserPeerSequence = 0;
 
 export interface PeerUpdateEvent {
   noteId: string;
   update: number[];
+}
+
+interface BrowserPeerConnection {
+  peerId: string;
+  addr: string;
+  socket: WebSocket;
 }
 
 type InvokeArgs = Record<string, unknown> | undefined;
@@ -124,6 +147,11 @@ export async function deleteNoteToTrash(noteId: string): Promise<boolean> {
 }
 
 export async function listPeers(): Promise<PeerInfo[]> {
+  const invoke = getInvoke();
+  if (!invoke) {
+    return listBrowserPeers();
+  }
+
   const peers = await invokeOrFallback<PeerInfo[]>('list_peers', undefined, []);
   return peers.map((peer) => ({
     ...peer,
@@ -136,10 +164,41 @@ export async function listPeers(): Promise<PeerInfo[]> {
 // ---------------------------------------------------------------------------
 
 export async function broadcastUpdate(payload: string): Promise<boolean> {
+  if (!getInvoke()) {
+    let failed = 0;
+    for (const connection of browserPeerConnections.values()) {
+      try {
+        if (connection.socket.readyState === WS_READY_OPEN) {
+          connection.socket.send(payload);
+        } else {
+          failed += 1;
+        }
+      } catch {
+        failed += 1;
+      }
+    }
+
+    return failed === 0;
+  }
+
   return invokeWithStatus('broadcast_update', { payload });
 }
 
 export async function sendToPeer(peerId: string, payload: string): Promise<boolean> {
+  if (!getInvoke()) {
+    const connection = browserPeerConnections.get(peerId);
+    if (!connection || connection.socket.readyState !== WS_READY_OPEN) {
+      return false;
+    }
+
+    try {
+      connection.socket.send(payload);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   return invokeWithStatus('send_to_peer', { peerId, payload });
 }
 
@@ -151,10 +210,7 @@ export async function joinWorkspace(target: string): Promise<CommandAck> {
   const invoke = getInvoke();
 
   if (!invoke) {
-    return {
-      accepted: false,
-      reason: 'tauri runtime unavailable',
-    };
+    return joinWorkspaceViaBrowser(target);
   }
 
   try {
@@ -168,6 +224,11 @@ export async function joinWorkspace(target: string): Promise<CommandAck> {
 }
 
 export async function getLocalPeerId(): Promise<string> {
+  const invoke = getInvoke();
+  if (!invoke) {
+    return browserLocalPeerId;
+  }
+
   return invokeOrFallback<string>('get_peer_id', undefined, '');
 }
 
@@ -186,19 +247,38 @@ export interface WsMessageEvent {
 }
 
 export function onPeerConnected(listener: (event: PeerConnectedEvent) => void): () => void {
-  return createTauriEventListener('hypernote://peer-connected', listener, isPeerConnectedEvent);
+  const tauriListen = getListen();
+  if (tauriListen) {
+    return createTauriEventListener('hypernote://peer-connected', listener, isPeerConnectedEvent);
+  }
+
+  return createWindowEventListener(FALLBACK_EVENT_PEER_CONNECTED, listener, isPeerConnectedEvent);
 }
 
 export function onPeerDisconnected(listener: (event: PeerDisconnectedEvent) => void): () => void {
-  return createTauriEventListener(
-    'hypernote://peer-disconnected',
+  const tauriListen = getListen();
+  if (tauriListen) {
+    return createTauriEventListener(
+      'hypernote://peer-disconnected',
+      listener,
+      isPeerDisconnectedEvent,
+    );
+  }
+
+  return createWindowEventListener(
+    FALLBACK_EVENT_PEER_DISCONNECTED,
     listener,
     isPeerDisconnectedEvent,
   );
 }
 
 export function onWsMessage(listener: (event: WsMessageEvent) => void): () => void {
-  return createTauriEventListener('hypernote://ws-message', listener, isWsMessageEvent);
+  const tauriListen = getListen();
+  if (tauriListen) {
+    return createTauriEventListener('hypernote://ws-message', listener, isWsMessageEvent);
+  }
+
+  return createWindowEventListener(FALLBACK_EVENT_WS_MESSAGE, listener, isWsMessageEvent);
 }
 
 function createTauriEventListener<T>(
@@ -231,6 +311,28 @@ function createTauriEventListener<T>(
   return () => {
     active = false;
     stop?.();
+  };
+}
+
+function createWindowEventListener<T>(
+  eventName: string,
+  listener: (event: T) => void,
+  validator: (payload: unknown) => payload is T,
+): () => void {
+  if (typeof window === 'undefined') {
+    return () => {};
+  }
+
+  const handler = (event: Event) => {
+    const customEvent = event as CustomEvent<unknown>;
+    if (validator(customEvent.detail)) {
+      listener(customEvent.detail);
+    }
+  };
+
+  window.addEventListener(eventName, handler);
+  return () => {
+    window.removeEventListener(eventName, handler);
   };
 }
 
@@ -334,4 +436,205 @@ function normalizePeerStatus(value: string): PeerStatus {
   }
 
   return 'DISCONNECTED';
+}
+
+function listBrowserPeers(): PeerInfo[] {
+  return Array.from(browserPeerConnections.values()).map((connection) => ({
+    peerId: connection.peerId,
+    wsUrl: `ws://${connection.addr}`,
+    status: normalizeWebSocketReadyState(connection.socket.readyState),
+    noteIds: [],
+  }));
+}
+
+function normalizeWebSocketReadyState(readyState: number): PeerStatus {
+  if (readyState === WS_READY_OPEN) {
+    return 'CONNECTED';
+  }
+
+  if (readyState === WS_READY_CONNECTING) {
+    return 'CONNECTING';
+  }
+
+  return 'DISCONNECTED';
+}
+
+async function joinWorkspaceViaBrowser(target: string): Promise<CommandAck> {
+  if (typeof window === 'undefined' || typeof WebSocket === 'undefined') {
+    return {
+      accepted: false,
+      reason: 'websocket runtime unavailable',
+    };
+  }
+
+  const normalized = normalizeJoinTarget(target);
+  if (!normalized.ok) {
+    return {
+      accepted: false,
+      reason: normalized.reason,
+    };
+  }
+
+  for (const connection of browserPeerConnections.values()) {
+    if (
+      connection.addr === normalized.addr &&
+      connection.socket.readyState !== WS_READY_CLOSING &&
+      connection.socket.readyState !== WS_READY_CLOSED
+    ) {
+      return {
+        accepted: true,
+        reason: 'already connected',
+      };
+    }
+  }
+
+  const peerId = createBrowserPeerId();
+  let socket: WebSocket;
+  try {
+    socket = new WebSocket(normalized.url);
+  } catch {
+    return {
+      accepted: false,
+      reason: 'invalid websocket target',
+    };
+  }
+
+  browserPeerConnections.set(peerId, {
+    peerId,
+    addr: normalized.addr,
+    socket,
+  });
+
+  let finalized = false;
+  const finalize = () => {
+    if (finalized) {
+      return;
+    }
+
+    finalized = true;
+    browserPeerConnections.delete(peerId);
+    emitFallbackEvent(FALLBACK_EVENT_PEER_DISCONNECTED, { peerId });
+  };
+
+  socket.onopen = () => {
+    emitFallbackEvent(FALLBACK_EVENT_PEER_CONNECTED, {
+      peerId,
+      addr: normalized.addr,
+    });
+  };
+  socket.onmessage = (event) => {
+    void emitWsMessageEvent(peerId, event.data);
+  };
+  socket.onclose = () => {
+    finalize();
+  };
+  socket.onerror = () => {
+    if (socket.readyState === WS_READY_CLOSING || socket.readyState === WS_READY_CLOSED) {
+      finalize();
+    }
+  };
+
+  return {
+    accepted: true,
+    reason: null,
+  };
+}
+
+function createBrowserPeerId(): string {
+  browserPeerSequence += 1;
+  return `browser-peer-${browserPeerSequence}`;
+}
+
+function emitFallbackEvent(eventName: string, detail: unknown): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.dispatchEvent(new CustomEvent(eventName, { detail }));
+}
+
+async function emitWsMessageEvent(peerId: string, rawData: unknown): Promise<void> {
+  if (typeof rawData === 'string') {
+    emitFallbackEvent(FALLBACK_EVENT_WS_MESSAGE, { peerId, payload: rawData });
+    return;
+  }
+
+  if (rawData instanceof ArrayBuffer) {
+    const payload = new TextDecoder().decode(new Uint8Array(rawData));
+    emitFallbackEvent(FALLBACK_EVENT_WS_MESSAGE, { peerId, payload });
+    return;
+  }
+
+  if (ArrayBuffer.isView(rawData)) {
+    const payload = new TextDecoder().decode(
+      new Uint8Array(rawData.buffer, rawData.byteOffset, rawData.byteLength),
+    );
+    emitFallbackEvent(FALLBACK_EVENT_WS_MESSAGE, { peerId, payload });
+    return;
+  }
+
+  if (rawData instanceof Blob) {
+    const payload = await rawData.text();
+    emitFallbackEvent(FALLBACK_EVENT_WS_MESSAGE, { peerId, payload });
+  }
+}
+
+function normalizeJoinTarget(
+  rawTarget: string,
+): { ok: true; addr: string; url: string } | { ok: false; reason: string } {
+  const target = rawTarget.trim();
+  if (!target) {
+    return { ok: false, reason: 'target is empty' };
+  }
+
+  if (target.startsWith('ws://')) {
+    return parseHostPortTarget(target.slice(5), true);
+  }
+
+  if (target.includes('://')) {
+    return { ok: false, reason: 'only ws:// scheme is supported' };
+  }
+
+  return parseHostPortTarget(target, false);
+}
+
+function parseHostPortTarget(
+  value: string,
+  requirePort: boolean,
+): { ok: true; addr: string; url: string } | { ok: false; reason: string } {
+  if (!value) {
+    return { ok: false, reason: 'target is empty' };
+  }
+
+  if (/[/?#\s]/u.test(value)) {
+    return { ok: false, reason: 'target contains unsupported characters' };
+  }
+
+  const separatorIndex = value.lastIndexOf(':');
+  if (separatorIndex === -1) {
+    if (requirePort) {
+      return { ok: false, reason: 'target must be ws://host:port' };
+    }
+
+    const addr = `${value}:4747`;
+    return { ok: true, addr, url: `ws://${addr}/` };
+  }
+
+  const host = value.slice(0, separatorIndex);
+  const portRaw = value.slice(separatorIndex + 1);
+  if (!host) {
+    return { ok: false, reason: 'host is missing' };
+  }
+
+  if (host.includes(':')) {
+    return { ok: false, reason: 'target host format is invalid' };
+  }
+
+  const port = Number(portRaw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return { ok: false, reason: 'port must be between 1 and 65535' };
+  }
+
+  const addr = `${host}:${port}`;
+  return { ok: true, addr, url: `ws://${addr}/` };
 }
