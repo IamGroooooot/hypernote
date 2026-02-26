@@ -1,4 +1,4 @@
-import type { NoteDocument, NoteMeta, PeerInfo, PeerStatus } from './contracts';
+import type { CommandAck, NoteDocument, NoteMeta, PeerInfo, PeerStatus } from './contracts';
 
 export interface PeerUpdateEvent {
   noteId: string;
@@ -60,12 +60,13 @@ async function invokeWithStatus(command: string, args: InvokeArgs): Promise<bool
   const invoke = getInvoke();
 
   if (!invoke) {
-    return false;
+    // Local web fallback: keep UX responsive when Tauri runtime is absent.
+    return true;
   }
 
   try {
-    await invoke<void>(command, args);
-    return true;
+    const ack = await invoke<CommandAck>(command, args);
+    return ack.accepted;
   } catch {
     return false;
   }

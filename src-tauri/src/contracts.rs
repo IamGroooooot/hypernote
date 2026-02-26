@@ -26,3 +26,17 @@ pub struct PeerInfo {
     pub status: String,
     pub note_ids: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandAck {
+    pub accepted: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerUpdateEvent {
+    pub note_id: String,
+    pub update: Vec<u8>,
+}

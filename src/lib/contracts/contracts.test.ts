@@ -66,13 +66,18 @@ describe('storage container', () => {
 
     const encoded = encodeNoteContainer(meta, new Uint8Array([1, 2, 3]));
     const tampered = new Uint8Array(encoded.bytes);
+    const view = new DataView(tampered.buffer);
+    const metadataLen = view.getUint32(5, false);
+    const metadataOffset = 9;
 
-    const raw = String.fromCharCode(...tampered);
-    const replaced = raw.replace('Alpha', 'Bravo');
+    const metadataBytes = tampered.slice(metadataOffset, metadataOffset + metadataLen);
+    const metadata = JSON.parse(new TextDecoder().decode(metadataBytes)) as NoteMeta;
+    metadata.title = 'Bravo';
+    const rewrittenMetadata = new TextEncoder().encode(JSON.stringify(metadata));
 
-    for (let index = 0; index < replaced.length; index += 1) {
-      tampered[index] = replaced.charCodeAt(index);
-    }
+    // Same byte length, so we can patch metadata in-place without touching offsets.
+    expect(rewrittenMetadata.length).toBe(metadataBytes.length);
+    tampered.set(rewrittenMetadata, metadataOffset);
 
     expect(() => decodeNoteContainer(tampered)).toThrow('checksum mismatch');
   });

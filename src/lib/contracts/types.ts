@@ -10,8 +10,13 @@ export interface NoteMeta {
 
 export interface NoteDocument {
   meta: NoteMeta;
-  yjsState: Uint8Array;
+  yjsState: number[];
   markdown: string;
+}
+
+export interface CommandAck {
+  accepted: boolean;
+  reason: string | null;
 }
 
 export interface PeerInfo {
