@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createFrame,
   decodeNoteContainer,
+  decodeNoteMetadata,
   encodeNoteContainer,
   isValidWsFrame,
   PROTOCOL_VERSION,
@@ -53,5 +54,20 @@ describe('storage container', () => {
     encoded.bytes[encoded.bytes.length - 1] ^= 0x01;
 
     expect(() => decodeNoteContainer(encoded.bytes)).toThrow('checksum mismatch');
+  });
+
+  it('extracts metadata without reading document body', () => {
+    const meta: NoteMeta = {
+      id: 'note-meta',
+      title: 'Meta only',
+      createdAt: 10,
+      updatedAt: 20,
+      deletedAt: null,
+    };
+
+    const encoded = encodeNoteContainer(meta, new Uint8Array([3, 1, 4, 1, 5, 9]));
+    const metadata = decodeNoteMetadata(encoded.bytes);
+
+    expect(metadata).toEqual(meta);
   });
 });

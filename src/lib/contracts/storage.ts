@@ -2,6 +2,11 @@ import type { NoteMeta } from './types';
 
 const MAGIC = new Uint8Array([0x48, 0x59, 0x50, 0x4e]); // HYPN
 const VERSION = 1;
+const METADATA_LEN_OFFSET = MAGIC.length + 1;
+const METADATA_OFFSET = METADATA_LEN_OFFSET + 4;
+const MIN_CONTAINER_SIZE = METADATA_OFFSET + 8 + 4;
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
 
 export interface EncodedNote {
   bytes: Uint8Array;
@@ -13,19 +18,18 @@ export interface DecodedNote {
 }
 
 export function encodeNoteContainer(meta: NoteMeta, yjsState: Uint8Array): EncodedNote {
-  const textEncoder = new TextEncoder();
   const metadataBytes = textEncoder.encode(JSON.stringify(meta));
-  const headerSize = 4 + 1 + 4 + metadataBytes.length + 8;
+  const headerSize = METADATA_OFFSET + metadataBytes.length + 8;
   const totalSize = headerSize + yjsState.length + 4;
 
   const bytes = new Uint8Array(totalSize);
   const view = new DataView(bytes.buffer);
 
   bytes.set(MAGIC, 0);
-  view.setUint8(4, VERSION);
-  view.setUint32(5, metadataBytes.length, false);
+  view.setUint8(MAGIC.length, VERSION);
+  view.setUint32(METADATA_LEN_OFFSET, metadataBytes.length, false);
 
-  let offset = 9;
+  let offset = METADATA_OFFSET;
   bytes.set(metadataBytes, offset);
   offset += metadataBytes.length;
 
@@ -40,34 +44,13 @@ export function encodeNoteContainer(meta: NoteMeta, yjsState: Uint8Array): Encod
   return { bytes };
 }
 
+export function decodeNoteMetadata(bytes: Uint8Array): NoteMeta {
+  return parseContainerPrefix(bytes).meta;
+}
+
 export function decodeNoteContainer(bytes: Uint8Array): DecodedNote {
-  if (bytes.length < 17) {
-    throw new Error('Invalid container: too short');
-  }
-
-  if (!MAGIC.every((value, index) => bytes[index] === value)) {
-    throw new Error('Invalid container: bad magic');
-  }
-
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const version = view.getUint8(4);
-  if (version !== VERSION) {
-    throw new Error(`Unsupported container version: ${version}`);
-  }
-
-  const metadataLen = view.getUint32(5, false);
-  let offset = 9;
-  const metadataEnd = offset + metadataLen;
-
-  if (metadataEnd > bytes.length) {
-    throw new Error('Invalid container: metadata overflow');
-  }
-
-  const textDecoder = new TextDecoder();
-  const metadataJson = textDecoder.decode(bytes.slice(offset, metadataEnd));
-  const meta = JSON.parse(metadataJson) as NoteMeta;
-
-  offset = metadataEnd;
+  const { meta, view, offsetAfterMetadata } = parseContainerPrefix(bytes);
+  let offset = offsetAfterMetadata;
   if (offset + 8 > bytes.length) {
     throw new Error('Invalid container: missing body length');
   }
@@ -89,6 +72,40 @@ export function decodeNoteContainer(bytes: Uint8Array): DecodedNote {
   }
 
   return { meta, yjsState };
+}
+
+interface ParsedContainerPrefix {
+  meta: NoteMeta;
+  view: DataView;
+  offsetAfterMetadata: number;
+}
+
+function parseContainerPrefix(bytes: Uint8Array): ParsedContainerPrefix {
+  if (bytes.length < MIN_CONTAINER_SIZE) {
+    throw new Error('Invalid container: too short');
+  }
+
+  if (!MAGIC.every((value, index) => bytes[index] === value)) {
+    throw new Error('Invalid container: bad magic');
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const version = view.getUint8(MAGIC.length);
+  if (version !== VERSION) {
+    throw new Error(`Unsupported container version: ${version}`);
+  }
+
+  const metadataLen = view.getUint32(METADATA_LEN_OFFSET, false);
+  const metadataEnd = METADATA_OFFSET + metadataLen;
+
+  if (metadataEnd > bytes.length) {
+    throw new Error('Invalid container: metadata overflow');
+  }
+
+  const metadataJson = textDecoder.decode(bytes.slice(METADATA_OFFSET, metadataEnd));
+  const meta = JSON.parse(metadataJson) as NoteMeta;
+
+  return { meta, view, offsetAfterMetadata: metadataEnd };
 }
 
 // Simple CRC32 implementation for deterministic container validation.
