@@ -46,6 +46,7 @@ pub struct PeerUpdateEvent {
 pub struct PeerConnectedEvent {
     pub peer_id: String,
     pub addr: String,
+    pub outbound: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

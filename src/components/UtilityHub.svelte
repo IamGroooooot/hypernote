@@ -3,6 +3,11 @@
 
   type JoinStatus = 'idle' | 'joining' | 'joined' | 'error';
   type ShareStatus = 'idle' | 'copied' | 'error';
+  type JoinRequest = {
+    peerId: string;
+    addr: string;
+    requestedAt: number;
+  };
 
   export let open = false;
   export let state: SyncStatus['state'] = 'offline';
@@ -15,6 +20,7 @@
   export let joinStatus: JoinStatus = 'idle';
   export let joinMessage = '';
   export let joinFocusNonce = 0;
+  export let pendingJoinRequests: JoinRequest[] = [];
   export let onClose: () => void = () => {};
   export let onShareWorkspace: () => void = () => {};
   export let onExportCurrent: () => void = () => {};
@@ -24,6 +30,8 @@
   export let onJoinWorkspace: () => void = () => {};
   export let onRefreshShareTarget: () => void = () => {};
   export let onCopyShareTarget: () => void = () => {};
+  export let onApproveJoin: (peerId: string) => void = () => {};
+  export let onRejectJoin: (peerId: string) => void = () => {};
 
   let joinInputEl: HTMLInputElement | undefined;
   let previousJoinFocusNonce = 0;
@@ -91,6 +99,30 @@
           {joinMessage}
         </p>
       </form>
+
+      <div class="join-requests">
+        <h3>pending join requests</h3>
+        {#if pendingJoinRequests.length === 0}
+          <p>no pending requests</p>
+        {:else}
+          <ul>
+            {#each pendingJoinRequests as request}
+              <li>
+                <div class="join-request-info">
+                  <span>{request.addr}</span>
+                  <small>{request.peerId.slice(0, 8)}</small>
+                </div>
+                <div class="join-request-actions">
+                  <button type="button" on:click={() => onApproveJoin(request.peerId)}>approve</button>
+                  <button type="button" class="ghost danger" on:click={() => onRejectJoin(request.peerId)}
+                    >reject</button
+                  >
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
 
       <div class="actions-grid">
         <button type="button" on:click={onShareWorkspace}>share workspace</button>
@@ -277,6 +309,87 @@
     display: grid;
     gap: 8px;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .join-requests {
+    border: var(--border);
+    border-radius: var(--radius-md);
+    padding: 8px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .join-requests h3 {
+    margin: 0;
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .join-requests p {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .join-requests ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 8px;
+  }
+
+  .join-requests li {
+    border: var(--border);
+    border-radius: var(--radius-sm);
+    padding: 6px;
+    display: grid;
+    gap: 6px;
+  }
+
+  .join-request-info {
+    display: grid;
+    gap: 2px;
+  }
+
+  .join-request-info span {
+    font-size: 12px;
+    color: var(--text);
+    word-break: break-all;
+  }
+
+  .join-request-info small {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .join-request-actions {
+    display: inline-flex;
+    gap: 6px;
+  }
+
+  .join-request-actions button {
+    border: var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 11px;
+    padding: 5px 8px;
+  }
+
+  .join-request-actions button:hover {
+    border-color: var(--accent-muted);
+    color: var(--accent);
+  }
+
+  .join-request-actions .danger:hover {
+    border-color: var(--danger);
+    color: var(--danger);
   }
 
   .actions-grid button {

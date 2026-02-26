@@ -243,6 +243,38 @@ Lint gate policy:
 - color literals and non-token radius values are rejected in app/component styles
 - exceptions require inline justification marker: `ds-allow-literal`
 
+### 4.4 Share/Join Connection FSM (Normative)
+
+`share/join` handshake MUST follow the finite state machine below.
+No document sync (`hello`, `update`) is allowed before `APPROVED`.
+
+```
+DISCONNECTED
+  └─(ws open inbound)──────────► PENDING_INBOUND_APPROVAL
+  └─(join target connect)──────► PENDING_OUTBOUND_APPROVAL
+
+PENDING_INBOUND_APPROVAL
+  └─(host approve)─────────────► APPROVED
+  └─(host reject/close)────────► REJECTED
+
+PENDING_OUTBOUND_APPROVAL
+  └─(host hello/accept)────────► APPROVED
+  └─(host reject/error/close)──► REJECTED
+
+APPROVED
+  └─(disconnect)───────────────► DISCONNECTED
+
+REJECTED
+  └─(disconnect)───────────────► DISCONNECTED
+```
+
+Enforcement:
+
+- In `PENDING_*`, inbound `update` frames are ignored.
+- In `PENDING_*`, local app MUST NOT broadcast/sync note updates to that peer.
+- Host MUST present explicit approve/reject action for inbound join requests.
+- Rejected peer is closed at transport level.
+
 ---
 
 ## 5. Invariants Delta

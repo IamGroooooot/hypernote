@@ -16,8 +16,14 @@ use tokio::sync::mpsc::UnboundedSender;
 // App state
 // ---------------------------------------------------------------------------
 
-/// peerId → channel to send outgoing WS text messages to that peer.
-type WsPeers = Arc<Mutex<HashMap<String, UnboundedSender<String>>>>;
+/// peerId → channel to send outgoing WS commands to that peer.
+type WsPeers = Arc<Mutex<HashMap<String, UnboundedSender<WsPeerCommand>>>>;
+
+#[derive(Debug, Clone)]
+enum WsPeerCommand {
+    Text(String),
+    Close { reason: Option<String> },
+}
 
 struct AppState {
     notes: Mutex<HashMap<String, NoteDocument>>,
@@ -215,7 +221,7 @@ fn broadcast_update(payload: String, state: tauri::State<'_, AppState>) -> Comma
 
     let mut failed = 0usize;
     for tx in ws_peers.values() {
-        if tx.send(payload.clone()).is_err() {
+        if tx.send(WsPeerCommand::Text(payload.clone())).is_err() {
             failed += 1;
         }
     }
@@ -243,7 +249,41 @@ fn send_to_peer(peer_id: String, payload: String, state: tauri::State<'_, AppSta
     };
 
     if let Some(tx) = ws_peers.get(&peer_id) {
-        let ok = tx.send(payload).is_ok();
+        let ok = tx.send(WsPeerCommand::Text(payload)).is_ok();
+        CommandAck {
+            accepted: ok,
+            reason: if ok {
+                None
+            } else {
+                Some("channel closed".to_string())
+            },
+        }
+    } else {
+        CommandAck {
+            accepted: false,
+            reason: Some(format!("peer not found: {peer_id}")),
+        }
+    }
+}
+
+#[tauri::command]
+fn disconnect_peer(
+    peer_id: String,
+    reason: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> CommandAck {
+    let ws_peers = match state.ws_peers.lock() {
+        Ok(value) => value,
+        Err(_) => {
+            return CommandAck {
+                accepted: false,
+                reason: Some("ws_peers poisoned".to_string()),
+            }
+        }
+    };
+
+    if let Some(tx) = ws_peers.get(&peer_id) {
+        let ok = tx.send(WsPeerCommand::Close { reason }).is_ok();
         CommandAck {
             accepted: ok,
             reason: if ok {
@@ -316,19 +356,39 @@ async fn handle_ws_connection<S>(
     addr: String,
     app: tauri::AppHandle,
     ws_peers: WsPeers,
+    outbound: bool,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::{
+        protocol::{
+            frame::{coding::CloseCode, CloseFrame},
+            Message,
+        },
+        Utf8Bytes,
+    };
 
     let peer_id = uuid::Uuid::new_v4().to_string();
     let (mut sink, mut stream) = ws.split();
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<WsPeerCommand>();
 
     // Register peer sender — Arc<Mutex<...>> is 'static, safe across awaits.
     if let Ok(mut peers) = ws_peers.lock() {
         peers.insert(peer_id.clone(), tx);
+    }
+
+    let state = app.state::<AppState>();
+    if let Ok(mut peers) = state.peers.lock() {
+        peers.insert(
+            peer_id.clone(),
+            PeerInfo {
+                peer_id: peer_id.clone(),
+                ws_url: format!("ws://{addr}"),
+                status: "CONNECTED".to_string(),
+                note_ids: Vec::new(),
+            },
+        );
     }
 
     let _ = app.emit(
@@ -336,14 +396,29 @@ async fn handle_ws_connection<S>(
         PeerConnectedEvent {
             peer_id: peer_id.clone(),
             addr: addr.clone(),
+            outbound,
         },
     );
 
     // Forward outgoing messages to the WS sink in a background task.
     let sink_task = tauri::async_runtime::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            if sink.send(Message::Text(msg.into())).await.is_err() {
-                break;
+        while let Some(cmd) = rx.recv().await {
+            match cmd {
+                WsPeerCommand::Text(msg) => {
+                    if sink.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                WsPeerCommand::Close { reason } => {
+                    let close_reason = reason.unwrap_or_else(|| "peer disconnected".to_string());
+                    let _ = sink
+                        .send(Message::Close(Some(CloseFrame {
+                            code: CloseCode::Normal,
+                            reason: Utf8Bytes::from(close_reason),
+                        })))
+                        .await;
+                    break;
+                }
             }
         }
     });
@@ -369,6 +444,11 @@ async fn handle_ws_connection<S>(
 
     // Deregister peer.
     if let Ok(mut peers) = ws_peers.lock() {
+        peers.remove(&peer_id);
+    }
+
+    let state = app.state::<AppState>();
+    if let Ok(mut peers) = state.peers.lock() {
         peers.remove(&peer_id);
     }
 
@@ -403,7 +483,7 @@ async fn run_ws_server(app: tauri::AppHandle, ws_peers: WsPeers) {
                 let addr_str = addr.to_string();
                 tauri::async_runtime::spawn(async move {
                     match tokio_tungstenite::accept_async(stream).await {
-                        Ok(ws) => handle_ws_connection(ws, addr_str, app, ws_peers).await,
+                        Ok(ws) => handle_ws_connection(ws, addr_str, app, ws_peers, false).await,
                         Err(e) => eprintln!("[hypernote] WS handshake error: {e}"),
                     }
                 });
@@ -421,7 +501,7 @@ async fn connect_to_peer_ws(addr: String, app: tauri::AppHandle, ws_peers: WsPee
     let url = format!("ws://{addr}/");
 
     match tokio_tungstenite::connect_async(&url).await {
-        Ok((ws, _)) => handle_ws_connection(ws, addr, app, ws_peers).await,
+        Ok((ws, _)) => handle_ws_connection(ws, addr, app, ws_peers, true).await,
         Err(e) => eprintln!("[hypernote] WS connect to {addr} failed: {e}"),
     }
 }
@@ -692,6 +772,7 @@ fn main() {
             list_peers,
             broadcast_update,
             send_to_peer,
+            disconnect_peer,
             get_peer_id,
             get_share_target,
             join_workspace,

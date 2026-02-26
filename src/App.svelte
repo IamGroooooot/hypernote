@@ -10,7 +10,7 @@
   import StatusBar from './components/StatusBar.svelte';
   import TopBar from './components/TopBar.svelte';
   import UtilityHub from './components/UtilityHub.svelte';
-  import type { NoteMeta, PeerInfo, SyncStatus } from './lib/contracts';
+  import type { FrameType, NoteMeta, PeerInfo, SyncStatus } from './lib/contracts';
   import {
     createTextareaYjsBridge,
     type TextChangeEvent,
@@ -24,7 +24,7 @@
   import { createPeerStatusStore } from './lib/stores/peer-status';
   import {
     applyLocalEdit,
-    broadcastUpdate,
+    disconnectPeer,
     getShareTarget,
     getLocalPeerId,
     joinWorkspace,
@@ -39,12 +39,23 @@
   } from './lib/tauri-client';
   import { isModKey, matchesShortcut, type PaletteActionId } from './lib/ui/actions';
   import {
+    createErrorFrame,
     createHelloFrame,
     createUpdateFrame,
     decodeBinaryPayload,
     decodeFrameMessage,
     serializeFrame,
   } from './lib/sync/frame';
+  import {
+    allowsInboundFrame,
+    allowsOutboundSync,
+    createJoinPeerState,
+    isJoinApproved,
+    isJoinPendingInboundApproval,
+    peerStatusFromJoinState,
+    transitionJoinPeerState,
+    type JoinPeerState,
+  } from './lib/sync/join-fsm';
 
   const store = isTauriEnv() ? new TauriNoteContainerStore() : new BrowserNoteContainerStore();
   const persistence = new LocalNotePersistence(store);
@@ -64,6 +75,11 @@
 
   type JoinWorkspaceStatus = 'idle' | 'joining' | 'joined' | 'error';
   type ShareTargetStatus = 'idle' | 'copied' | 'error';
+  type JoinRequest = {
+    peerId: string;
+    addr: string;
+    requestedAt: number;
+  };
 
   let notes: NoteMeta[] = [];
   let trashNotes: NoteMeta[] = [];
@@ -92,6 +108,8 @@
   let joinWorkspaceStatus: JoinWorkspaceStatus = 'idle';
   let joinWorkspaceMessage = JOIN_INPUT_HINT;
   let joinFocusNonce = 0;
+  let pendingJoinRequests: JoinRequest[] = [];
+  let joinPeerStates: Record<string, JoinPeerState> = {};
 
   let isMobileViewport = false;
   let mobileTab: 'notes' | 'editor' = 'editor';
@@ -180,6 +198,8 @@
     });
 
     const stopPeerDisconnected = onPeerDisconnected((event) => {
+      delete joinPeerStates[event.peerId];
+      pendingJoinRequests = pendingJoinRequests.filter((request) => request.peerId !== event.peerId);
       peerStore.removePeer(event.peerId);
       peers = peerStore.peersForNote('');
       sync = peerStore.syncStatus(selectedId);
@@ -464,7 +484,9 @@
       return;
     }
 
-    const connectedPeers = peers.filter((peer) => peer.status === 'CONNECTED');
+    const connectedPeers = peers.filter(
+      (peer) => peer.status === 'CONNECTED' && isPeerApproved(peer.peerId),
+    );
     if (connectedPeers.length === 0) {
       return;
     }
@@ -509,7 +531,11 @@
 
     if (myPeerId) {
       const frame = createUpdateFrame(selectedId, myPeerId, update);
-      void broadcastUpdate(serializeFrame(frame));
+      const payload = serializeFrame(frame);
+      const approvedPeers = peers.filter(
+        (peer) => peer.status === 'CONNECTED' && isPeerApproved(peer.peerId),
+      );
+      await Promise.all(approvedPeers.map((peer) => sendToPeer(peer.peerId, payload)));
     }
   }
 
@@ -566,24 +592,68 @@
     }
   }
 
+  function isPeerApproved(peerId: string): boolean {
+    const state = joinPeerStates[peerId];
+    return state === undefined || isJoinApproved(state);
+  }
+
+  function shouldProcessFrame(peerId: string, frameType: FrameType): boolean {
+    const state = joinPeerStates[peerId];
+    if (!state) {
+      return true;
+    }
+
+    return allowsInboundFrame(state, frameType);
+  }
+
+  function upsertPendingJoinRequest(peerId: string, addr: string): void {
+    const existing = pendingJoinRequests.find((request) => request.peerId === peerId);
+    if (existing) {
+      pendingJoinRequests = pendingJoinRequests.map((request) =>
+        request.peerId === peerId ? { ...request, addr, requestedAt: Date.now() } : request,
+      );
+      return;
+    }
+
+    pendingJoinRequests = [...pendingJoinRequests, { peerId, addr, requestedAt: Date.now() }];
+  }
+
+  async function sendInitialSyncToPeer(peerId: string): Promise<void> {
+    if (!selectedId || !bridge || !myPeerId) {
+      return;
+    }
+
+    const helloFrame = createHelloFrame('', myPeerId, [selectedId]);
+    await sendToPeer(peerId, serializeFrame(helloFrame));
+
+    const fullState = bridge.encodeStateAsUpdate();
+    const updateFrame = createUpdateFrame(selectedId, myPeerId, fullState);
+    await sendToPeer(peerId, serializeFrame(updateFrame));
+  }
+
   async function handlePeerConnected(event: PeerConnectedEvent): Promise<void> {
+    const state = createJoinPeerState(event.outbound ? 'outbound' : 'inbound');
+    joinPeerStates[event.peerId] = state;
+
     peerStore.upsertPeer({
       peerId: event.peerId,
       wsUrl: `ws://${event.addr}`,
-      status: 'CONNECTED',
+      status: peerStatusFromJoinState(state),
       noteIds: selectedId ? [selectedId] : [],
     });
     peers = peerStore.peersForNote('');
     sync = peerStore.syncStatus(selectedId);
 
-    if (!selectedId || !bridge || !myPeerId) return;
+    if (isJoinPendingInboundApproval(state)) {
+      upsertPendingJoinRequest(event.peerId, event.addr);
+      utilityHubOpen = true;
+      joinWorkspaceStatus = 'idle';
+      joinWorkspaceMessage = `Join request from ${event.addr}. Approve or reject.`;
+      return;
+    }
 
-    const helloFrame = createHelloFrame('', myPeerId, [selectedId]);
-    await sendToPeer(event.peerId, serializeFrame(helloFrame));
-
-    const fullState = bridge.encodeStateAsUpdate();
-    const updateFrame = createUpdateFrame(selectedId, myPeerId, fullState);
-    await sendToPeer(event.peerId, serializeFrame(updateFrame));
+    joinWorkspaceStatus = 'joined';
+    joinWorkspaceMessage = 'Join request sent. Waiting for host approval.';
   }
 
   async function handleWsMessage(event: WsMessageEvent): Promise<void> {
@@ -591,13 +661,46 @@
     if (!result.ok) return;
 
     const { frame } = result;
+    if (!shouldProcessFrame(event.peerId, frame.type)) {
+      return;
+    }
+
+    if (frame.type === 'error') {
+      const payload = frame.payload as { code: string; message: string };
+      const currentState = joinPeerStates[event.peerId];
+      if (currentState) {
+        const nextState = transitionJoinPeerState(currentState, 'host_rejected');
+        joinPeerStates[event.peerId] = nextState;
+        peerStore.setPeerStatus(event.peerId, peerStatusFromJoinState(nextState));
+      }
+      pendingJoinRequests = pendingJoinRequests.filter((request) => request.peerId !== event.peerId);
+
+      peers = peerStore.peersForNote('');
+      sync = peerStore.syncStatus(selectedId);
+      joinWorkspaceStatus = 'error';
+      joinWorkspaceMessage = payload.message || 'Join rejected by host.';
+      return;
+    }
 
     if (frame.type === 'hello') {
+      const currentState = joinPeerStates[event.peerId];
+      if (
+        currentState &&
+        currentState.lifecycle === 'pending_outbound_approval'
+      ) {
+        const nextState = transitionJoinPeerState(currentState, 'host_hello');
+        joinPeerStates[event.peerId] = nextState;
+        peerStore.setPeerStatus(event.peerId, peerStatusFromJoinState(nextState));
+        joinWorkspaceStatus = 'joined';
+        joinWorkspaceMessage = 'Join approved. Sync connected.';
+        await sendInitialSyncToPeer(event.peerId);
+      }
+
       const payload = frame.payload as { openNoteIds: string[] };
       peerStore.setPeerNoteIds(event.peerId, payload.openNoteIds);
       sync = peerStore.syncStatus(selectedId);
 
-      if (bridge && myPeerId && payload.openNoteIds.includes(selectedId)) {
+      if (bridge && myPeerId && payload.openNoteIds.includes(selectedId) && isPeerApproved(event.peerId)) {
         const fullState = bridge.encodeStateAsUpdate();
         const updateFrame = createUpdateFrame(selectedId, myPeerId, fullState);
         await sendToPeer(event.peerId, serializeFrame(updateFrame));
@@ -605,6 +708,10 @@
     }
 
     if (frame.type === 'update') {
+      if (!isPeerApproved(event.peerId)) {
+        return;
+      }
+
       const bytes = decodeBinaryPayload(frame.payload as { bytes: number[] });
       await handleRemoteUpdate(event.peerId, frame.noteId, bytes);
     }
@@ -696,19 +803,68 @@
     for (const peer of nextPeers) {
       const existingPeer = peerStore.peersForNote('').find((current) => current.peerId === peer.peerId);
       const noteIds = peer.noteIds.length > 0 ? peer.noteIds : existingPeer?.noteIds ?? [];
+      const joinState = joinPeerStates[peer.peerId];
+      const status = joinState ? peerStatusFromJoinState(joinState) : peer.status;
       peerStore.upsertPeer({
         ...peer,
+        status,
         noteIds,
       });
     }
 
     for (const existingPeer of peerStore.peersForNote('')) {
       if (!nextById.has(existingPeer.peerId)) {
+        delete joinPeerStates[existingPeer.peerId];
+        pendingJoinRequests = pendingJoinRequests.filter(
+          (request) => request.peerId !== existingPeer.peerId,
+        );
         peerStore.removePeer(existingPeer.peerId);
       }
     }
 
     peers = peerStore.peersForNote('');
+  }
+
+  async function handleApproveJoinRequest(peerId: string): Promise<void> {
+    const currentState = joinPeerStates[peerId];
+    if (!currentState || !isJoinPendingInboundApproval(currentState)) {
+      return;
+    }
+
+    const nextState = transitionJoinPeerState(currentState, 'host_approved');
+    joinPeerStates[peerId] = nextState;
+    pendingJoinRequests = pendingJoinRequests.filter((request) => request.peerId !== peerId);
+    peerStore.setPeerStatus(peerId, peerStatusFromJoinState(nextState));
+    peers = peerStore.peersForNote('');
+    sync = peerStore.syncStatus(selectedId);
+    if (allowsOutboundSync(nextState)) {
+      await sendInitialSyncToPeer(peerId);
+    }
+  }
+
+  async function handleRejectJoinRequest(peerId: string): Promise<void> {
+    const currentState = joinPeerStates[peerId];
+    if (!currentState || currentState.lifecycle === 'rejected') {
+      return;
+    }
+
+    const nextState = transitionJoinPeerState(currentState, 'host_rejected');
+    joinPeerStates[peerId] = nextState;
+    pendingJoinRequests = pendingJoinRequests.filter((request) => request.peerId !== peerId);
+    if (myPeerId) {
+      const rejectionFrame = createErrorFrame(
+        '',
+        myPeerId,
+        'JOIN_REJECTED',
+        'Join request rejected by host.',
+      );
+      await sendToPeer(peerId, serializeFrame(rejectionFrame));
+    }
+
+    await disconnectPeer(peerId, 'join request rejected by host');
+    peerStore.removePeer(peerId);
+    peers = peerStore.peersForNote('');
+    sync = peerStore.syncStatus(selectedId);
   }
 
   function titleFromText(text: string): string {
@@ -870,7 +1026,7 @@
     const ack = await joinWorkspace(target);
     if (ack.accepted) {
       joinWorkspaceStatus = 'joined';
-      joinWorkspaceMessage = 'Join requested. Wait for peer connection.';
+      joinWorkspaceMessage = 'Join requested. Waiting for host approval.';
       joinWorkspaceTarget = '';
       void refreshPeers();
       return;
@@ -1290,6 +1446,7 @@
   joinStatus={joinWorkspaceStatus}
   joinMessage={joinWorkspaceMessage}
   joinFocusNonce={joinFocusNonce}
+  pendingJoinRequests={pendingJoinRequests}
   onClose={() => {
     utilityHubOpen = false;
   }}
@@ -1314,6 +1471,12 @@
   }}
   onCopyShareTarget={() => {
     void copyShareTarget();
+  }}
+  onApproveJoin={(peerId) => {
+    void handleApproveJoinRequest(peerId);
+  }}
+  onRejectJoin={(peerId) => {
+    void handleRejectJoinRequest(peerId);
   }}
 />
 

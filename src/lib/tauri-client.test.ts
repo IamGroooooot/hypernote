@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyLocalEdit,
   broadcastUpdate,
+  disconnectPeer,
   getShareTarget,
   joinWorkspace,
   listPeers,
@@ -88,6 +89,12 @@ describe('tauri client', () => {
     socket!.emitMessage('{"type":"hello"}');
 
     expect(onConnected).toHaveBeenCalledTimes(1);
+    expect(onConnected).toHaveBeenCalledWith(
+      expect.objectContaining({
+        addr: '127.0.0.1:4747',
+        outbound: true,
+      }),
+    );
     const connectedPeerId = onConnected.mock.calls[0]?.[0]?.peerId;
     expect(typeof connectedPeerId).toBe('string');
     expect(onMessage).toHaveBeenCalledWith({
@@ -108,6 +115,43 @@ describe('tauri client', () => {
 
     stopConnected();
     stopMessage();
+  });
+
+  it('disconnects browser fallback peer connection', async () => {
+    installWindow();
+    const sockets = installMockWebSocket();
+    const onConnected = vi.fn();
+    const stopConnected = onPeerConnected(onConnected);
+
+    const joinPromise = joinWorkspace('127.0.0.1:4747');
+    const socket = sockets[0];
+    expect(socket).toBeDefined();
+    socket!.open();
+    await joinPromise;
+
+    const connectedPeerId = onConnected.mock.calls[0]?.[0]?.peerId as string;
+    const disconnected = await disconnectPeer(connectedPeerId, 'rejected by host');
+    expect(disconnected).toBe(true);
+
+    const peers = await listPeers();
+    expect(peers).toHaveLength(0);
+
+    stopConnected();
+  });
+
+  it('invokes backend disconnect command in tauri runtime', async () => {
+    const invoke = vi.fn(async () => ({ accepted: true, reason: null }));
+    installWindow({
+      __TAURI_INVOKE__: invoke,
+    });
+
+    const result = await disconnectPeer('peer-1', 'manual reject');
+
+    expect(result).toBe(true);
+    expect(invoke).toHaveBeenCalledWith('disconnect_peer', {
+      peerId: 'peer-1',
+      reason: 'manual reject',
+    });
   });
 
   it('normalizes peer statuses from invoke payload', async () => {

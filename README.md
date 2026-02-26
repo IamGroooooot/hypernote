@@ -80,7 +80,10 @@ Build artifacts are generated under `src-tauri/target/release/bundle`.
    - open Utility Hub
    - paste target into `join workspace`
    - click `join`
-4. Confirm connection in `active peers`.
+4. On the host device:
+   - a pending join request appears in Utility Hub
+   - click `approve` or `reject`
+5. After approval, both sides show the peer in `active peers` and sync starts.
 
 Auto-discovery via mDNS is also running in parallel, but manual join target is the direct path.
 
@@ -101,5 +104,5 @@ npm run test
 ## Current Constraints
 
 - Same-LAN usage only (no internet relay server)
-- No auth/permission model yet for shared sessions
+- No account/auth identity layer yet (approval is per-connection, local runtime only)
 - Manual join target currently expects hostname/IPv4 style host (no IPv6 bracket path yet)

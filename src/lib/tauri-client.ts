@@ -203,6 +203,29 @@ export async function sendToPeer(peerId: string, payload: string): Promise<boole
   return invokeWithStatus('send_to_peer', { peerId, payload });
 }
 
+export async function disconnectPeer(peerId: string, reason?: string): Promise<boolean> {
+  if (!getInvoke()) {
+    const connection = browserPeerConnections.get(peerId);
+    if (!connection) {
+      return false;
+    }
+
+    try {
+      connection.socket.close(1000, reason ?? 'peer disconnected');
+    } catch {
+      try {
+        connection.socket.close();
+      } catch {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  return invokeWithStatus('disconnect_peer', { peerId, reason: reason ?? null });
+}
+
 export async function getShareTarget(): Promise<string> {
   return invokeOrFallback<string>('get_share_target', undefined, '');
 }
@@ -236,6 +259,7 @@ export async function getLocalPeerId(): Promise<string> {
 export interface PeerConnectedEvent {
   peerId: string;
   addr: string;
+  outbound: boolean;
 }
 
 export interface PeerDisconnectedEvent {
@@ -340,7 +364,9 @@ function createWindowEventListener<T>(
 function isPeerConnectedEvent(payload: unknown): payload is PeerConnectedEvent {
   if (!payload || typeof payload !== 'object') return false;
   const v = payload as Record<string, unknown>;
-  return typeof v.peerId === 'string' && typeof v.addr === 'string';
+  return (
+    typeof v.peerId === 'string' && typeof v.addr === 'string' && typeof v.outbound === 'boolean'
+  );
 }
 
 function isPeerDisconnectedEvent(payload: unknown): payload is PeerDisconnectedEvent {
@@ -546,6 +572,7 @@ async function joinWorkspaceViaBrowser(target: string): Promise<CommandAck> {
       emitFallbackEvent(FALLBACK_EVENT_PEER_CONNECTED, {
         peerId,
         addr: normalized.addr,
+        outbound: true,
       });
       settle({
         accepted: true,
