@@ -23,7 +23,29 @@ It supports offline-first writing, LAN peer sync, and workspace share/join via W
 npm install
 ```
 
-### 2) Run Web UI (frontend-only)
+### 2) Install Tauri CLI (once)
+
+If `cargo tauri` is missing, install it:
+
+```bash
+cargo install tauri-cli --version '^2.0.0' --locked
+```
+
+Verify:
+
+```bash
+cargo tauri --version
+```
+
+Troubleshooting:
+
+```text
+error: no such command: tauri
+```
+
+This means the CLI is not installed yet. Run the install command above.
+
+### 3) Run Web UI (frontend-only)
 
 ```bash
 npm run dev
@@ -31,12 +53,21 @@ npm run dev
 
 Note: browser mode is useful for UI development. LAN share/join requires the Tauri runtime.
 
-### 3) Run Desktop App (Tauri)
+### 4) Run Desktop App (Tauri)
 
 ```bash
 cd src-tauri
 cargo tauri dev
 ```
+
+### 5) Build Desktop App (Tauri)
+
+```bash
+cd src-tauri
+cargo tauri build
+```
+
+Build artifacts are generated under `src-tauri/target/release/bundle`.
 
 ## Share / Join Workspace
 
