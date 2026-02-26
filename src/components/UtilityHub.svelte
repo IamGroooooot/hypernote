@@ -32,6 +32,7 @@
   export let onCopyShareTarget: () => void = () => {};
   export let onApproveJoin: (peerId: string) => void = () => {};
   export let onRejectJoin: (peerId: string) => void = () => {};
+  export let onDisconnectPeer: (peerId: string) => void = () => {};
 
   let joinInputEl: HTMLInputElement | undefined;
   let previousJoinFocusNonce = 0;
@@ -153,8 +154,19 @@
           <ul>
             {#each peers as peer}
               <li>
-                <span>{peer.peerId.slice(0, 8)}</span>
-                <span>{peer.status.toLowerCase()}</span>
+                <div class="peer-entry">
+                  <span>{peer.peerId.slice(0, 8)}</span>
+                  {#if peer.status === 'CONNECTED'}
+                    <span class="peer-status-dot connected" aria-label="connected" title="connected"></span>
+                  {:else}
+                    <span>{peer.status.toLowerCase()}</span>
+                  {/if}
+                </div>
+                {#if peer.status === 'CONNECTED'}
+                  <button type="button" class="ghost danger" on:click={() => onDisconnectPeer(peer.peerId)}
+                    >disconnect</button
+                  >
+                {/if}
               </li>
             {/each}
           </ul>
@@ -480,10 +492,28 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
     font-size: 12px;
     border: var(--border);
     border-radius: var(--radius-sm);
     padding: 6px 8px;
+  }
+
+  .peer-entry {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .peer-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-round);
+    display: inline-block;
+  }
+
+  .peer-status-dot.connected {
+    background: var(--accent);
   }
 
   .status-dot {

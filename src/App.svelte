@@ -871,6 +871,31 @@
     sync = peerStore.syncStatus(selectedId);
   }
 
+  async function handleDisconnectConnectedPeer(peerId: string): Promise<void> {
+    const peer = peers.find((entry) => entry.peerId === peerId);
+    if (!peer || peer.status !== 'CONNECTED') {
+      return;
+    }
+
+    const joinState = joinPeerStates[peerId];
+    if (joinState) {
+      joinPeerStates[peerId] = transitionJoinPeerState(joinState, 'transport_closed');
+    }
+
+    const disconnected = await disconnectPeer(peerId, 'peer disconnected by user');
+    if (!disconnected) {
+      joinWorkspaceStatus = 'error';
+      joinWorkspaceMessage = 'Failed to disconnect peer.';
+      return;
+    }
+
+    pendingJoinRequests = pendingJoinRequests.filter((request) => request.peerId !== peerId);
+    peerStore.removePeer(peerId);
+    peers = peerStore.peersForNote('');
+    sync = peerStore.syncStatus(selectedId);
+    void refreshPeers();
+  }
+
   function titleFromText(text: string): string {
     const title = text.split('\n')[0]?.trim() ?? '';
     return title.length > 0 ? title.slice(0, 200) : 'Untitled';
@@ -1481,6 +1506,9 @@
   }}
   onRejectJoin={(peerId) => {
     void handleRejectJoinRequest(peerId);
+  }}
+  onDisconnectPeer={(peerId) => {
+    void handleDisconnectConnectedPeer(peerId);
   }}
 />
 
