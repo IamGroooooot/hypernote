@@ -37,7 +37,7 @@
     type PeerConnectedEvent,
     type WsMessageEvent,
   } from './lib/tauri-client';
-  import { isModKey, matchesShortcut, type PaletteActionId } from './lib/ui/actions';
+  import { formatModShortcut, isModKey, matchesShortcut, type PaletteActionId } from './lib/ui/actions';
   import {
     createErrorFrame,
     createHelloFrame,
@@ -72,6 +72,7 @@
   const JOIN_INPUT_HINT = 'Enter host, host:port, or ws://host:port';
   const SHARE_TARGET_HINT = 'Share this target with a collaborator on the same LAN';
   const SHARE_TARGET_LOADING = 'Resolving local share target...';
+  const UNDO_SHORTCUT_LABEL = formatModShortcut('Z');
 
   type JoinWorkspaceStatus = 'idle' | 'joining' | 'joined' | 'error';
   type ShareTargetStatus = 'idle' | 'copied' | 'error';
@@ -267,6 +268,9 @@
     }
 
     if (matchesShortcut(event, 'delete')) {
+      if (utilityHubOpen) {
+        return;
+      }
       event.preventDefault();
       if (selectedId) {
         await handleDeleteNote(selectedId);
@@ -1429,7 +1433,7 @@
   {#if undoToast}
     <div class="undo-toast" aria-live="polite">
       <span>Moved "{undoToast.title}" to trash</span>
-      <button type="button" on:click={() => void undoDelete()}>undo (⌘/Ctrl+Z)</button>
+      <button type="button" on:click={() => void undoDelete()}>undo ({UNDO_SHORTCUT_LABEL})</button>
     </div>
   {/if}
 </div>

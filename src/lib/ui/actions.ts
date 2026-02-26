@@ -17,6 +17,8 @@ export interface PaletteActionDescriptor {
   keywords: string[];
 }
 
+export type ShortcutPlatform = 'mac' | 'non-mac';
+
 export const PALETTE_ACTIONS: readonly PaletteActionDescriptor[] = [
   {
     id: 'new-note',
@@ -88,6 +90,8 @@ export function filterActionByContext(
     connectedPeers: number;
   },
 ): PaletteActionDescriptor | null {
+  const shortcut = formatShortcutForDisplay(action.shortcut);
+
   if (!context.hasSelectedNote && (action.id === 'rename' || action.id === 'delete')) {
     return null;
   }
@@ -100,6 +104,7 @@ export function filterActionByContext(
     return {
       ...action,
       label: `⊕ peers (${context.connectedPeers} connected)`,
+      shortcut,
     };
   }
 
@@ -107,10 +112,14 @@ export function filterActionByContext(
     return {
       ...action,
       label: `↩ restore from trash (${context.trashCount})`,
+      shortcut,
     };
   }
 
-  return action;
+  return {
+    ...action,
+    shortcut,
+  };
 }
 
 export function matchesActionQuery(action: PaletteActionDescriptor, query: string): boolean {
@@ -158,4 +167,35 @@ export function matchesShortcut(event: KeyboardEvent, actionId: PaletteActionId)
     default:
       return false;
   }
+}
+
+export function getShortcutPlatform(): ShortcutPlatform {
+  if (typeof navigator === 'undefined') {
+    return 'non-mac';
+  }
+
+  const userAgentData = (navigator as Navigator & { userAgentData?: { platform?: string } })
+    .userAgentData;
+  const platform = userAgentData?.platform ?? navigator.platform ?? navigator.userAgent ?? '';
+
+  const normalized = platform.toLowerCase();
+  return /(mac|iphone|ipad|ipod)/u.test(normalized) ? 'mac' : 'non-mac';
+}
+
+export function formatShortcutForDisplay(
+  shortcut: string,
+  platform: ShortcutPlatform = getShortcutPlatform(),
+): string {
+  if (platform === 'mac') {
+    return shortcut.replace(/⌘\/Ctrl\+/gu, '⌘+');
+  }
+
+  return shortcut.replace(/⌘\/Ctrl\+/gu, 'Ctrl+');
+}
+
+export function formatModShortcut(
+  key: string,
+  platform: ShortcutPlatform = getShortcutPlatform(),
+): string {
+  return platform === 'mac' ? `⌘+${key}` : `Ctrl+${key}`;
 }
