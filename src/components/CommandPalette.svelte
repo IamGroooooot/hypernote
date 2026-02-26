@@ -23,6 +23,7 @@
   export let onRestoreNote: (noteId: string) => void = () => {};
   export let onOpenPeers: () => void = () => {};
   export let onJoinWorkspace: () => void = () => {};
+  export let onToggleNotesPane: () => void = () => {};
   export let onToggleToc: () => void = () => {};
   export let onShareWorkspace: () => void = () => {};
   export let onExportCurrent: () => void = () => {};
@@ -193,6 +194,10 @@
         break;
       case 'toc':
         onToggleToc();
+        onClose();
+        break;
+      case 'toggle-notes':
+        onToggleNotesPane();
         onClose();
         break;
       case 'rename':

@@ -117,6 +117,7 @@
 
   let isMobileViewport = false;
   let mobileTab: 'notes' | 'editor' = 'editor';
+  let desktopNotesCollapsed = false;
   let showMobileTabs = false;
   let mobileActionSheetOpen = false;
   let showGestureCoachmark = false;
@@ -262,6 +263,12 @@
     if (matchesShortcut(event, 'toc')) {
       event.preventDefault();
       toggleToc();
+      return;
+    }
+
+    if (matchesShortcut(event, 'toggle-notes')) {
+      event.preventDefault();
+      toggleNotesPane();
       return;
     }
 
@@ -1081,6 +1088,14 @@
     }
   }
 
+  function toggleNotesPane(): void {
+    if (isMobileViewport) {
+      return;
+    }
+
+    desktopNotesCollapsed = !desktopNotesCollapsed;
+  }
+
   function openJoinWorkspaceFlow(): void {
     openUtilityHubPanel();
     joinWorkspaceStatus = 'idle';
@@ -1295,6 +1310,9 @@
       case 'toc':
         toggleToc();
         break;
+      case 'toggle-notes':
+        toggleNotesPane();
+        break;
       case 'join-workspace':
         openJoinWorkspaceFlow();
         break;
@@ -1459,8 +1477,13 @@
     </nav>
   {/if}
 
-  <main class="content" class:mobile={isMobileViewport} class:editor-only={isMobileViewport && mobileTab === 'editor'}>
-    {#if !isMobileViewport || mobileTab === 'notes'}
+  <main
+    class="content"
+    class:mobile={isMobileViewport}
+    class:editor-only={isMobileViewport && mobileTab === 'editor'}
+    class:notes-collapsed={!isMobileViewport && desktopNotesCollapsed}
+  >
+    {#if (isMobileViewport && mobileTab === 'notes') || (!isMobileViewport && !desktopNotesCollapsed)}
       <NoteSidebar
         notes={notes}
         selectedId={selectedId}
@@ -1616,6 +1639,9 @@
   onJoinWorkspace={() => {
     runAction('join-workspace');
   }}
+  onToggleNotesPane={() => {
+    runAction('toggle-notes');
+  }}
   onToggleToc={() => {
     runAction('toc');
   }}
@@ -1709,6 +1735,10 @@
     grid-template-rows: 1fr;
     height: 100%;
     min-height: 0;
+  }
+
+  .content.notes-collapsed {
+    grid-template-columns: 1fr;
   }
 
   .mobile-editor-fullbleed {
