@@ -15,6 +15,7 @@ const WS_READY_CONNECTING = 0;
 const WS_READY_OPEN = 1;
 const WS_READY_CLOSING = 2;
 const WS_READY_CLOSED = 3;
+const BROWSER_JOIN_TIMEOUT_MS = 3_000;
 
 const browserPeerConnections = new Map<string, BrowserPeerConnection>();
 const browserLocalPeerId = `web-${Math.random().toString(36).slice(2, 10)}`;
@@ -506,6 +507,7 @@ async function joinWorkspaceViaBrowser(target: string): Promise<CommandAck> {
   });
 
   let finalized = false;
+  let settled = false;
   const finalize = () => {
     if (finalized) {
       return;
@@ -516,28 +518,70 @@ async function joinWorkspaceViaBrowser(target: string): Promise<CommandAck> {
     emitFallbackEvent(FALLBACK_EVENT_PEER_DISCONNECTED, { peerId });
   };
 
-  socket.onopen = () => {
-    emitFallbackEvent(FALLBACK_EVENT_PEER_CONNECTED, {
-      peerId,
-      addr: normalized.addr,
-    });
-  };
-  socket.onmessage = (event) => {
-    void emitWsMessageEvent(peerId, event.data);
-  };
-  socket.onclose = () => {
-    finalize();
-  };
-  socket.onerror = () => {
-    if (socket.readyState === WS_READY_CLOSING || socket.readyState === WS_READY_CLOSED) {
-      finalize();
-    }
-  };
+  return new Promise<CommandAck>((resolve) => {
+    const settle = (ack: CommandAck) => {
+      if (settled) {
+        return;
+      }
 
-  return {
-    accepted: true,
-    reason: null,
-  };
+      settled = true;
+      resolve(ack);
+    };
+
+    const timeoutId = globalThis.setTimeout(() => {
+      try {
+        socket.close();
+      } catch {
+        // ignore
+      }
+
+      settle({
+        accepted: false,
+        reason: 'failed to connect: timeout',
+      });
+    }, BROWSER_JOIN_TIMEOUT_MS);
+
+    socket.onopen = () => {
+      globalThis.clearTimeout(timeoutId);
+      emitFallbackEvent(FALLBACK_EVENT_PEER_CONNECTED, {
+        peerId,
+        addr: normalized.addr,
+      });
+      settle({
+        accepted: true,
+        reason: null,
+      });
+    };
+
+    socket.onmessage = (event) => {
+      void emitWsMessageEvent(peerId, event.data);
+    };
+
+    socket.onclose = () => {
+      globalThis.clearTimeout(timeoutId);
+      finalize();
+      if (!settled) {
+        settle({
+          accepted: false,
+          reason: 'connection closed before ready',
+        });
+      }
+    };
+
+    socket.onerror = () => {
+      globalThis.clearTimeout(timeoutId);
+      if (!settled) {
+        settle({
+          accepted: false,
+          reason: 'failed to connect peer',
+        });
+      }
+
+      if (socket.readyState === WS_READY_CLOSING || socket.readyState === WS_READY_CLOSED) {
+        finalize();
+      }
+    };
+  });
 }
 
 function createBrowserPeerId(): string {

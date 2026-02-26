@@ -129,10 +129,7 @@ fn apply_peer_update(
         note.yjs_state = update.clone();
         note.meta.updated_at = unix_now_ms();
 
-        let payload = PeerUpdateEvent {
-            note_id,
-            update,
-        };
+        let payload = PeerUpdateEvent { note_id, update };
 
         if let Err(error) = app.emit("hypernote://peer-update", payload) {
             return CommandAck {
@@ -234,11 +231,7 @@ fn broadcast_update(payload: String, state: tauri::State<'_, AppState>) -> Comma
 }
 
 #[tauri::command]
-fn send_to_peer(
-    peer_id: String,
-    payload: String,
-    state: tauri::State<'_, AppState>,
-) -> CommandAck {
+fn send_to_peer(peer_id: String, payload: String, state: tauri::State<'_, AppState>) -> CommandAck {
     let ws_peers = match state.ws_peers.lock() {
         Ok(value) => value,
         Err(_) => {
@@ -253,7 +246,11 @@ fn send_to_peer(
         let ok = tx.send(payload).is_ok();
         CommandAck {
             accepted: ok,
-            reason: if ok { None } else { Some("channel closed".to_string()) },
+            reason: if ok {
+                None
+            } else {
+                Some("channel closed".to_string())
+            },
         }
     } else {
         CommandAck {
@@ -291,6 +288,13 @@ fn join_workspace(
             }
         }
     };
+
+    if is_self_join_target(&addr) {
+        return CommandAck {
+            accepted: false,
+            reason: Some("cannot join your own workspace target".to_string()),
+        };
+    }
 
     let ws_peers = Arc::clone(&state.ws_peers);
     tauri::async_runtime::spawn(async move {
@@ -442,7 +446,7 @@ fn run_mdns(peer_id: String, app: tauri::AppHandle, ws_peers: WsPeers) {
         "_hypernote._tcp.local.",
         &peer_id,
         &host,
-        "",   // IP: auto-detect from bound interfaces
+        "", // IP: auto-detect from bound interfaces
         4747,
         None,
     );
@@ -559,6 +563,43 @@ fn parse_host_port_target(value: &str, require_port: bool) -> Result<String, Str
     Ok(format!("{value}:4747"))
 }
 
+fn is_self_join_target(addr: &str) -> bool {
+    let (host, port_raw) = match addr.rsplit_once(':') {
+        Some(value) => value,
+        None => return false,
+    };
+
+    let port = match port_raw.parse::<u16>() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+
+    if port != 4747 {
+        return false;
+    }
+
+    let host_lower = host.to_ascii_lowercase();
+    if matches!(
+        host_lower.as_str(),
+        "localhost" | "127.0.0.1" | "0.0.0.0" | "::1"
+    ) {
+        return true;
+    }
+
+    let local_host = local_hostname().to_ascii_lowercase();
+    if host_lower == local_host || host_lower == format!("{local_host}.local") {
+        return true;
+    }
+
+    if let Some(local_ip) = detect_local_ipv4_host() {
+        if host == local_ip.to_string() {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn detect_local_ipv4_host() -> Option<std::net::Ipv4Addr> {
     use std::net::{IpAddr, UdpSocket};
 
@@ -576,6 +617,24 @@ fn default_share_host() -> String {
         host
     } else {
         format!("{host}.local")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_self_join_target, normalize_join_target};
+
+    #[test]
+    fn blocks_loopback_self_join_targets() {
+        assert!(is_self_join_target("localhost:4747"));
+        assert!(is_self_join_target("127.0.0.1:4747"));
+        assert!(!is_self_join_target("127.0.0.1:4748"));
+    }
+
+    #[test]
+    fn normalizes_host_without_port() {
+        let normalized = normalize_join_target("peer-host").expect("normalize should succeed");
+        assert_eq!(normalized, "peer-host:4747");
     }
 }
 

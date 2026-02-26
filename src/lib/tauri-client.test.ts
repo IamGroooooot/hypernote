@@ -62,11 +62,12 @@ describe('tauri client', () => {
     installWindow();
     const sockets = installMockWebSocket();
 
-    const result = await joinWorkspace('127.0.0.1:4747');
-
-    expect(result).toEqual({ accepted: true, reason: null });
+    const resultPromise = joinWorkspace('127.0.0.1:4747');
     expect(sockets).toHaveLength(1);
     expect(sockets[0]?.url).toBe('ws://127.0.0.1:4747/');
+    sockets[0]?.open();
+    const result = await resultPromise;
+    expect(result).toEqual({ accepted: true, reason: null });
     sockets[0]?.close();
   });
 
@@ -79,10 +80,11 @@ describe('tauri client', () => {
     const stopConnected = onPeerConnected(onConnected);
     const stopMessage = onWsMessage(onMessage);
 
-    await joinWorkspace('127.0.0.1:4747');
+    const joinPromise = joinWorkspace('127.0.0.1:4747');
     const socket = sockets[0];
     expect(socket).toBeDefined();
     socket!.open();
+    await joinPromise;
     socket!.emitMessage('{"type":"hello"}');
 
     expect(onConnected).toHaveBeenCalledTimes(1);

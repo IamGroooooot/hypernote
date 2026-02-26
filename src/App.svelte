@@ -452,10 +452,26 @@
     editorText = bridge.getText();
     cursorOffset = 0;
     sync = peerStore.syncStatus(noteId);
+    void announceOpenNotes(noteId);
 
     if (isMobileViewport) {
       setMobileTab('editor');
     }
+  }
+
+  async function announceOpenNotes(noteId: string): Promise<void> {
+    if (!myPeerId || !noteId) {
+      return;
+    }
+
+    const connectedPeers = peers.filter((peer) => peer.status === 'CONNECTED');
+    if (connectedPeers.length === 0) {
+      return;
+    }
+
+    const helloFrame = createHelloFrame('', myPeerId, [noteId]);
+    const payload = serializeFrame(helloFrame);
+    await Promise.all(connectedPeers.map((peer) => sendToPeer(peer.peerId, payload)));
   }
 
   function releaseBridge(): void {
@@ -555,7 +571,7 @@
       peerId: event.peerId,
       wsUrl: `ws://${event.addr}`,
       status: 'CONNECTED',
-      noteIds: [],
+      noteIds: selectedId ? [selectedId] : [],
     });
     peers = peerStore.peersForNote('');
     sync = peerStore.syncStatus(selectedId);
@@ -588,12 +604,84 @@
       }
     }
 
-    if (frame.type === 'update' && frame.noteId === selectedId && bridge) {
+    if (frame.type === 'update') {
       const bytes = decodeBinaryPayload(frame.payload as { bytes: number[] });
+      await handleRemoteUpdate(event.peerId, frame.noteId, bytes);
+    }
+  }
+
+  async function handleRemoteUpdate(
+    _peerId: string,
+    noteId: string,
+    bytes: Uint8Array,
+  ): Promise<void> {
+    if (!noteId) {
+      return;
+    }
+
+    const hasLocalNote = notes.some((note) => note.id === noteId);
+
+    if (!hasLocalNote) {
+      await createRemoteNoteFromUpdate(noteId, bytes);
+      await selectNote(noteId);
+      return;
+    }
+
+    if (noteId === selectedId && bridge) {
       peerStore.markSyncStarted(selectedId);
       sync = peerStore.syncStatus(selectedId);
       bridge.applyPeerUpdate(bytes);
+      return;
     }
+
+    await applyRemoteUpdateToStoredNote(noteId, bytes);
+  }
+
+  async function createRemoteNoteFromUpdate(noteId: string, bytes: Uint8Array): Promise<void> {
+    const tempBridge = createTextareaYjsBridge(noteId);
+    tempBridge.applyPeerUpdate(bytes);
+    const text = tempBridge.getText();
+
+    const now = Date.now();
+    const meta: NoteMeta = {
+      id: noteId,
+      title: titleFromText(text),
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+      body: text.slice(0, 500),
+    };
+
+    await persistence.saveNow({
+      meta,
+      yjsState: tempBridge.encodeStateAsUpdate(),
+    });
+    tempBridge.destroy();
+
+    notes = sortNotes([meta, ...notes]);
+  }
+
+  async function applyRemoteUpdateToStoredNote(noteId: string, bytes: Uint8Array): Promise<void> {
+    const snapshot = await persistence.open(noteId);
+    const tempBridge = createTextareaYjsBridge(noteId, { initialUpdate: snapshot.yjsState });
+    tempBridge.applyPeerUpdate(bytes);
+
+    const text = tempBridge.getText();
+    const nextMeta: NoteMeta = {
+      ...snapshot.meta,
+      title: titleFromText(text),
+      body: text.slice(0, 500),
+      updatedAt: Date.now(),
+      deletedAt: null,
+    };
+
+    await persistence.saveNow({
+      meta: nextMeta,
+      yjsState: tempBridge.encodeStateAsUpdate(),
+    });
+    tempBridge.destroy();
+
+    notes = sortNotes(notes.map((note) => (note.id === noteId ? nextMeta : note)));
   }
 
   async function refreshPeers(): Promise<void> {
@@ -606,7 +694,12 @@
     const nextById = new Map(nextPeers.map((peer) => [peer.peerId, peer]));
 
     for (const peer of nextPeers) {
-      peerStore.upsertPeer(peer);
+      const existingPeer = peerStore.peersForNote('').find((current) => current.peerId === peer.peerId);
+      const noteIds = peer.noteIds.length > 0 ? peer.noteIds : existingPeer?.noteIds ?? [];
+      peerStore.upsertPeer({
+        ...peer,
+        noteIds,
+      });
     }
 
     for (const existingPeer of peerStore.peersForNote('')) {
