@@ -1821,7 +1821,8 @@
   @media (max-width: 800px) {
     .content.mobile {
       grid-template-columns: 1fr;
-      grid-template-rows: auto 1fr;
+      grid-template-rows: 1fr;
+      min-height: 0;
     }
   }
 
