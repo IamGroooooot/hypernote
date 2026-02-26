@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
 
+  import CommandPalette from './components/CommandPalette.svelte';
   import EditorPanel from './components/EditorPanel.svelte';
   import NoteSidebar from './components/NoteSidebar.svelte';
   import StatusBar from './components/StatusBar.svelte';
@@ -13,15 +14,19 @@
   } from './lib/editor/textarea-yjs-bridge';
   import { BrowserNoteContainerStore } from './lib/persistence/browser-note-store';
   import { LocalNotePersistence } from './lib/persistence/local-note-persistence';
+  import { isTauriEnv, TauriNoteContainerStore } from './lib/persistence/tauri-note-store';
   import { createPeerStatusStore } from './lib/stores/peer-status';
   import { applyLocalEdit, listPeers, onPeerUpdate } from './lib/tauri-client';
 
-  const persistence = new LocalNotePersistence(new BrowserNoteContainerStore());
+  const store = isTauriEnv() ? new TauriNoteContainerStore() : new BrowserNoteContainerStore();
+  const persistence = new LocalNotePersistence(store);
   const peerStore = createPeerStatusStore();
 
   let notes: NoteMeta[] = [];
   let selectedId = '';
   let editorText = '';
+  let paletteOpen = false;
+  let peers: PeerInfo[] = [];
   let sync: SyncStatus = {
     noteId: '',
     peerCount: 0,
@@ -33,6 +38,18 @@
 
   onMount(() => {
     void bootstrap();
+
+    function handleKeydown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        paletteOpen = true;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
+        e.preventDefault();
+        void createNote();
+      }
+    }
+    window.addEventListener('keydown', handleKeydown);
 
     const stopPeerUpdateSubscription = onPeerUpdate((event) => {
       if (!bridge || event.noteId !== selectedId) {
@@ -50,6 +67,7 @@
     }, 5_000);
 
     return () => {
+      window.removeEventListener('keydown', handleKeydown);
       stopPeerUpdateSubscription();
       clearInterval(refreshInterval);
       releaseBridge();
@@ -195,6 +213,8 @@
         peerStore.removePeer(existingPeer.peerId);
       }
     }
+
+    peers = peerStore.peersForNote('');
   }
 
   function titleFromText(text: string): string {
@@ -210,10 +230,37 @@
     const random = Math.random().toString(36).slice(2, 12);
     return `note-${Date.now()}-${random}`;
   }
+
+  async function handleDeleteNote(noteId: string): Promise<void> {
+    await persistence.moveToTrash(noteId);
+    notes = notes.filter((n) => n.id !== noteId);
+    paletteOpen = false;
+    if (selectedId === noteId) {
+      if (notes.length > 0) {
+        await selectNote(notes[0].id);
+      } else {
+        await createNote();
+      }
+    }
+  }
+
+  async function handleRenameNote(noteId: string, newTitle: string): Promise<void> {
+    const note = notes.find((n) => n.id === noteId);
+    if (!note) return;
+    const updated = { ...note, title: newTitle, updatedAt: Date.now() };
+    notes = sortNotes(notes.map((n) => (n.id === noteId ? updated : n)));
+    paletteOpen = false;
+  }
 </script>
 
 <div class="app-shell">
-  <TopBar state={sync.state} peerCount={sync.peerCount} />
+  <TopBar
+    state={sync.state}
+    peerCount={sync.peerCount}
+    onOpenPalette={() => {
+      paletteOpen = true;
+    }}
+  />
 
   <main class="content">
     <NoteSidebar
@@ -235,3 +282,27 @@
 
   <StatusBar text={editorText} peerCount={sync.peerCount} state={sync.state} />
 </div>
+
+<CommandPalette
+  open={paletteOpen}
+  notes={notes}
+  peers={peers}
+  selectedNoteId={selectedId}
+  onClose={() => {
+    paletteOpen = false;
+  }}
+  onNewNote={() => {
+    void createNote();
+    paletteOpen = false;
+  }}
+  onSelectNote={(noteId) => {
+    void selectNote(noteId);
+    paletteOpen = false;
+  }}
+  onDeleteNote={(noteId) => {
+    void handleDeleteNote(noteId);
+  }}
+  onRenameNote={(noteId, newTitle) => {
+    void handleRenameNote(noteId, newTitle);
+  }}
+/>
