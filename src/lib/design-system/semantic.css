@@ -5,6 +5,7 @@
   --surface-elevated: rgba(18, 18, 26, 0.94);
   --surface-muted: rgba(26, 26, 36, 0.72);
   --surface-frosted: rgba(18, 18, 26, 0.85);
+  --surface-ghost: rgba(18, 18, 26, 0.4);
   --note-list-gradient-start: rgba(18, 18, 26, 0.95);
   --note-list-gradient-end: rgba(10, 10, 15, 0.95);
   --editor-bg: rgba(10, 10, 15, 0.7);
