@@ -122,6 +122,8 @@
 
   .editor-stage textarea {
     height: 100%;
+    position: relative;
+    z-index: 1;
   }
 
   .crdt-warning {
@@ -141,6 +143,7 @@
     width: 12px;
     pointer-events: none;
     opacity: 0.82;
+    z-index: 3;
   }
 
   .presence-tick {
@@ -172,6 +175,7 @@
     gap: 4px;
     pointer-events: none;
     max-width: min(220px, 52%);
+    z-index: 4;
   }
 
   .presence-chip {

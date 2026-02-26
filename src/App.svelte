@@ -177,6 +177,7 @@
     clientHeight: 1,
   };
   let remotePresenceByPeer: Record<string, RemotePresence> = {};
+  let remotePresenceIndicators: PresenceIndicator[] = [];
 
   $: showMobileTabs = isMobileViewport && mobileTab === 'notes';
   $: tocHeadings = parseMarkdownToc(editorText);
